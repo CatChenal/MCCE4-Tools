@@ -645,6 +645,7 @@ class TopNCmsPipeline:
         self.int_ph: bool = True
         self.inpdb: str = "prot.pdb"
         self.mcce_files: tuple = None
+        self.pdb_format = args.pdb_format
         self.outname: str = None
         self.output_dir: Path = None
         self.mso: MSout_np = None
@@ -719,19 +720,19 @@ class TopNCmsPipeline:
         phstr = f"{self.args.ph:.0f}" if self.int_ph else f"{self.args.ph:.2f}"
         ehstr = f"{self.args.eh:.0f}" if self.int_ph else f"{self.args.eh:.2f}"
         msg = f"""
-        Input options:
-        Run dir: {self.mcce_dir!s};
-        pH point: {phstr};
-        Eh point: {ehstr};
-        Residue kinds: {self.residue_kinds};
-        Top N crg ms to process: {self.args.n_top};
-        Occupancy threshold: {self.min_occ:.2%};
-        Keep waters? {self.args.wet};
-        Overwrite existing files? {self.args.overwrite};
-        Reduced number of ms data? {self.args.reduced_ms_rows};
-        Output folder: {self.output_dir}
-        """
-        logger.info(msg)
+Input options:
+  Run dir: {self.mcce_dir!s};
+  pH point: {phstr};
+  Eh point: {ehstr};
+  Residue kinds: {self.residue_kinds};
+  Top N crg ms to process: {self.args.n_top};
+  Occupancy threshold: {self.min_occ:.2%};
+  Keep waters? {self.args.wet};
+  Overwrite existing files? {self.args.overwrite};
+  Reduced number of ms data? {self.args.reduced_ms_rows};
+  Output folder: {self.output_dir}
+"""
+        print(msg)
     
         return
 
@@ -775,17 +776,17 @@ class TopNCmsPipeline:
         # format common keys for final pdb REMARK 250:
         remark_args = {
             "INPDB": self.inpdb,
-            "T": f"{self.mso.T:.2f}",
-            "PH": f"{self.mso.pH:.2f}",
-            "EH": f"{self.mso.Eh:.2f}",
+            "T": f"{self.mso.HDR.T:.2f}",
+            "PH": f"{self.mso.HDR.pH:.2f}",
+            "EH": f"{self.mso.HDR.Eh:.2f}",
         }
 
         write_tcrgms_pdbs(
             self.output_dir,
             self.top_df,
             self.top_ms,
-            self.mso.conf_ids,
-            self.mso.fixed_iconfs,
+            self.mso.CI.conf_ids,
+            self.mso.HDR.fixed_iconfs,
             remark_args,
             name_pref=S2PREF,
             dry=self.dry,
@@ -819,7 +820,8 @@ class TopNCmsPipeline:
         self.process_microstates()
         out_time = time.time()
         self.write_mcce_pdbs()
-        self.convert_pdbs()
+        if self.pdb_format:
+            self.convert_pdbs()
         self.write_tsv_and_summary()
         show_elapsed_time(out_time, info="Writing all output files")
         show_elapsed_time(start_time, info="Entire pipeline")
@@ -846,52 +848,58 @@ def cli_parser() -> ArgumentParser:
         "-mcce_dir",
         default="./",
         type=str,
-        help="Path to a mcce run dir; Default: %(default)s.",
+        help="Path to a mcce run dir; Default: %(default)s",
     )
     p.add_argument(
         "-ph",
         default="7",
         # parser will receive a string, no conversion: easier to determine if number in int or float later.
         type=str,
-        help="pH point (e.g.: 7, 7.5), at which the charge microstates are retrieved; Default: %(default)s.",
+        help="pH point (e.g.: 7, 7.5), at which the charge microstates are retrieved; Default: %(default)s",
     )
     p.add_argument(
         "-eh",
         default="0",
         # parser will receive a string, no conversion: easier to determine if number in int or float later.
         type=str,
-        help="Eh point (e.g.: 350, 350.5), at which the charge microstates are retrieved; Default: %(default)s.",
+        help="Eh point (e.g.: 350, 350.5), at which the charge microstates are retrieved; Default: %(default)s",
     )
     p.add_argument(
         "-n_top",
         default=N_TOP,
         type=int,
-        help="Number of most favorable charge microstates to return; Default: %(default)s.",
+        help="Number of most favorable charge microstates to return; Default: %(default)s",
+    )
+    p.add_argument(
+        "--pdb_format",
+        default=False,
+        action="store_true",
+        help="Convert the output coordinate files in step2_out format to pdb format; Default: %(default)s",
     )
     p.add_argument(
         "-residue_kinds",
         nargs="?",
         type=str,
         default=IONIZABLE_RES,
-        help="Filter mcce residues (including cofactors) with these kinds, e.g. ASP,GLU,HEM; Default: %(default)s.",
+        help="Filter mcce residues (including cofactors) with these kinds, e.g. ASP,GLU,HEM; Default: %(default)s",
     )
     p.add_argument(
         "-min_occ",
         default=MIN_OCC,
         type=float,
-        help="Output topN ms with occ >= min_occ; Default: %(default)s.",
+        help="Output topN ms with occ >= min_occ; Default: %(default)s",
     )
     p.add_argument(
         "--wet",
         default=False,
         action="store_true",
-        help="Output files with waters; Default: %(default)s.",
+        help="Output files with waters; Default: %(default)s",
     )
     p.add_argument(
         "--overwrite",
         default=False,
         action="store_true",
-        help="Overwrite existing output files; Default: %(default)s.",
+        help="Overwrite existing output files; Default: %(default)s",
     )
     p.add_argument(
         "--reduced_ms_rows",
@@ -899,7 +907,7 @@ def cli_parser() -> ArgumentParser:
         action="store_true",
         help="""True if given at the command line: when the MSout_np class loads 
         both ms and cms data, the number of saved ms data rows will match that of 
-        the saved cms. Default: %(default)s."
+        the saved cms. Default: %(default)s
         """
     )
 
