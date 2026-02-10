@@ -700,10 +700,7 @@ class TopNCmsPipeline:
                         "Would you like to proceed and rewrite this folder? y/n "
                     )
                 )
-                if ans.strip().lower() == "y":
-                    self.args.overwrite = True
-                else:
-                    self.args.overwrite = False
+                self.args.overwrite = True if ans.strip().lower()[0] == "y" else False
 
             if not self.args.overwrite:
                 logger.info(

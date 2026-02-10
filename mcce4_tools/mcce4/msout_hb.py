@@ -960,11 +960,11 @@ class MSout_hb:
                         hb_states[sij][1] += count
 
                     if mc_lines % (self.n_skip*5000) == 0:
-                        print(f" Trace: processed mc lines {mc_lines:,}...")
+                        print(f" Trace - mc lines processed: {mc_lines:,}...")
 
         self.hb_states = dict(hb_states)
         # sum count:
-        self.n_hb_space = np.array(list(self.hb_states.values()))[:,1].sum()
+        self.n_hb_space = int(np.array(list(self.hb_states.values()))[:,1].sum())
         # update states dict with aver E & occ:
         for s in hb_states:
             hb_states[s][0] = hb_states[s][0]/self.n_space
@@ -972,7 +972,7 @@ class MSout_hb:
 
         print(f"\nProcessed mc lines: {mc_lines:,}")  # accepted ms with flipped iconfs
         print(f"State space: {self.n_space:,}")
-        print(f"H-bonding space: {self.n_hb_space:,.0f} ({self.n_hb_space/self.n_space:.2%} of state space)")
+        print(f"H-bonding space: {self.n_hb_space:,} ({self.n_hb_space/self.n_space:.2%} of state space)")
         print(f"H-bonding states: {len(self.hb_states):,} (target: {self.n_target_states:,})")
 
         return
@@ -1134,14 +1134,14 @@ class MSout_hb:
             note = (f"# Data for the {len(self.hb_states):,} "
                     "saved hb_states whose sum count represents "
                     f"{self.n_hb_space/self.n_space:.2%} of the "
-                    f"state space ({self.n_space:,})\n"
+                    f"state space ({self.n_hb_space:,}/{self.n_space:,})\n"
             )
             with open(self.states_csv, "w") as fo:
                 fo.write(note)
                 dfs.to_csv(fo, index=False)
 
             print(("Main output files:\n"
-                   f"  {self.states_pairs_csv!s}: hb pairs with effective"
+                   f"  {self.states_pairs_csv!s}: hb pairs with effective "
                    "occ from hb state space\n"
                    f"  {self.states_csv!s}: hb states data\n"))
         return
