@@ -10,7 +10,6 @@ detect_hbonds tool.
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import defaultdict
 from pathlib import Path
-from pprint import pformat
 import re
 import sys
 import time
@@ -26,11 +25,9 @@ except ImportError as e:
     sys.exit(1)
 
 from mcce4.constants import res3_to_res1
-from mcce4.io_utils import MsoutHeaderData
-from mcce4.io_utils import N_HDR, N_STATES
+from mcce4.io_utils import MsoutHeaderData, N_HDR, N_STATES
 from mcce4.io_utils import get_mcce_filepaths, get_msout_size_info
 from mcce4.io_utils import reader_gen
-from mcce4.io_utils import subprocess_run
 from mcce4.io_utils import show_elapsed_time
 from mcce4.io_utils import table_to_df
 
@@ -164,7 +161,7 @@ def get_states_keys(states_csv: Path) -> list:
                        usecols=["state_id"]).to_string(header=False,
                                                        index=False).splitlines()
 
-    
+
 def check_state_pairs(state_pairs: str, hah_da_pairs: np.ndarray) -> Union[str, None]:
     """Check that the state id (str(tuple of hb pairs) pairs are found
     in the hah file, return a string of invalid pairs if found, else None.
@@ -331,10 +328,10 @@ class ConfInfo:
         self.conf_info = conf_info
 
         return
-    
+
     def fieldnames(self):
         print(" CI.conf_info fields: 0:confid, 1:crg, 2:iconf, 3:is_fixed, 4:ires, 5:is_free")
-    
+
     def get_iconf(self, confid: str) -> int:
         """Get the conf index of a confid;
         confid:0, crg:1, cx:2, is_fixed:3, rx:4, is_free:5
@@ -441,7 +438,7 @@ class MSout_hb:
                  verbose: bool = False):
         """
         MSout_hb class constructor, __init__.
-        
+
         Arguments:
          - mcce_dir (str): Path to a mcce simulation directory.
          - ph (str, '7'): Titration pH.
@@ -694,7 +691,7 @@ class MSout_hb:
                 extend_bk = sorted(bka, key=lambda x: x[-9:-4])
             else:
                 extend_bk = bka
-        
+
         print(" Number of extension slots from mixed pairs with fixed:",len(extend_fixed))
         print(" Number of extension slots from mixed pairs with BK:",len(extend_bk))
         self.n_fx = len(extend_fixed)
@@ -737,7 +734,7 @@ class MSout_hb:
         def is_free_pair(ro) -> int:
             """Assign classes to pair kinds."""
             return pair_classes[(ro["free_d"], ro["free_a"])]
-    
+
         df = self.load_hah_file()
 
         # these may help creating an adjacency list.
@@ -762,7 +759,7 @@ class MSout_hb:
 
         fixd, fixa, bkd, bka = self.get_fixed_or_bk_confids(df)
         self.get_extended_iconfs(fixd, fixa, bkd, bka)
-           
+
         def get_bk_ic(ro: pd.Series) -> int:
             """Return dummy iconf for BK confs. Function passed to df.apply()
             Bad values: -2 :: dict is None; -3: confid not in dict.
@@ -802,7 +799,7 @@ class MSout_hb:
         # save
         df.to_csv(self.hah_ms_fp, index=False)
         print(f"Accepted H-bonding pairs in df: {df.loc[df['free'].gt(0)].shape[0]}")
-    
+
         return df
 
     def expd_df_checks(self) -> bool:
@@ -908,7 +905,7 @@ class MSout_hb:
                                self.P
                                )
         return
-    
+
     def load_hb_states(self):
         """Process the 'msout file' for H-bond microstates.
         """
@@ -979,7 +976,7 @@ class MSout_hb:
         print(f"H-bonding states: {len(self.hb_states):,} (target: {self.n_target_states:,})")
 
         return
-    
+
     def load_hb_pairs(self):
         """Process the 'msout file' for H-bonding pairs.
         Populate hb_pairs dict with the pair as index and [count, occ] as value.
@@ -1059,23 +1056,28 @@ class MSout_hb:
         def get_resid(confid:str) -> str:
             id1 = res3_to_res1.get(confid[:3], confid[:3])
             return f"{id1}_" + confid[5] + str(int(confid[6:-4]))
-        
+
         if self.hb_pairs:
             dfp = pd.DataFrame.from_dict(self.hb_pairs, orient="index",
                                          columns=["count","occ"]).reset_index()
+            dfp["occ"] = dfp["occ"].round(6)
+            dfp["count"] = dfp["count"].astype("int32")
             dfp[["Mi","Mj"]] = dfp["index"].apply(lambda x: pd.Series([int(x[0]),int(x[1])]))
             dfp[["donor","acceptor"]] = dfp["index"].apply(
                 lambda x: pd.Series([self.iconf2confid[x[0]],self.iconf2confid[x[1]]]))
-            dfp["occ"] = dfp["occ"].round(6)
+            
             pairs_out = dfp[["Mi","Mj","donor","acceptor","count","occ"]]
-            pairs_out = pairs_out.sort_values(by="count", ascending=False)
+            pairs_out = pairs_out.sort_values(by=["count", "Mi"], ascending=[False, True])
             pairs_out.to_csv(self.pairs_csv, index=False)
 
             # grouped by 1-letter res codes for loading in cytoscape
             pairs_res_fp = fPAIR_RES.format(self.pheh_str)
             dfp[["res_d","res_a"]] = dfp["index"].apply(
-                lambda x: pd.Series([get_resid(self.iconf2confid[x[0]]),get_resid(self.iconf2confid[x[1]])]))
-            dfp_res = dfp.groupby(["res_d","res_a"], as_index=False).agg({"count": "mean","occ": "mean"})
+                lambda x: pd.Series([get_resid(self.iconf2confid[x[0]]),
+                                     get_resid(self.iconf2confid[x[1]])]))
+            dfp_res = dfp.groupby(["res_d","res_a"], as_index=False).agg({"count": "mean",
+                                                                          "occ": "mean"})
+            dfp_res["count"] = dfp_res["count"].astype("int32")
             dfp_res = dfp_res.sort_values(by="count", ascending=False)
             dfp_res.to_csv(pairs_res_fp, index=False)
 
@@ -1086,53 +1088,61 @@ class MSout_hb:
             hah_df.to_csv(self.hah_ms_fp, index=False)
 
             print(("Main output files:\n"
-                   f"  {self.pairs_csv!s} ({pairs_out.shape[0]:,} rows): conformers hb pairs\n"
-                   f"  {pairs_res_fp!s} ({dfp_res.shape[0]:,} rows): residues hb pairs (for loading in Cytoscape)\n"))
-        
+                   f"  {self.pairs_csv!s} ({pairs_out.shape[0]:,} "
+                   "rows): conformers hb pairs\n"
+                   f"  {pairs_res_fp!s} ({dfp_res.shape[0]:,} rows): "
+                   "residues hb pairs (for loading in Cytoscape)\n"))
+
         if self.hb_states:
             states_pairs_dict = defaultdict(int)
-            dfs = pd.DataFrame.from_dict(self.hb_states, orient='index',
-                                         columns = ["averE", "count", "occ"])
-            dfs = dfs.sort_values(by="count", ascending=False).reset_index()
+            dfs = pd.DataFrame.from_dict(self.hb_states,
+                                         orient="index",
+                                         columns=["averE", "count", "occ"]
+                                         ).reset_index()
             dfs["averE"] = dfs["averE"].round(3)
             dfs["occ"] = dfs["occ"].round(6)
             dfs["state_id"] = None
             for rx, ro in dfs.iterrows():
                 # convert conf indices to confids:
-                dfs.loc[rx,"state_id"] = ",".join(f"({self.iconf2confid[tp[0]]},{self.iconf2confid[tp[1]]})"
-                                                  for tp in ro["index"])
-                # get the effective count for each pair in the states
-                # state_count = ro["count"]
+                dfs.loc[rx,"state_id"] = ",".join(
+                    f"({self.iconf2confid[tp[0]]},{self.iconf2confid[tp[1]]})"
+                    for tp in ro["index"])
+                # get the effective count for each pair in the state key
                 for tpl in ro["index"]:
                     states_pairs_dict[tpl] += ro["count"]
-                    #states_pairs_dict[tpl][1].add(rx) # = rx   # parent state index
-            states_pairs_dict = dict(sorted(states_pairs_dict.items(),
-                                            key=lambda item:item[1], reverse=True))
-            with open(self.states_pairs_csv, "w") as fo:
-                fo.write(("# States hb_pairs; last 2 columns: state count, occ\n"
-                          "Mi,Mj,donor,acceptor,count,occ\n"))
-                for tpl in states_pairs_dict:
-                    Mi = int(tpl[0])
-                    Mj = int(tpl[1])
-                    _ = fo.write(",".join([f"{Mi},{Mj}",
-                                           f"{self.iconf2confid[Mi]},{self.iconf2confid[Mj]}",
-                                           f"{states_pairs_dict[tpl]}",
-                                           f"{states_pairs_dict[tpl]/self.n_hb_space:.6f}",
-                                           #f"{states_pairs_dict[tpl][1]}"
-                                           ]
-                                          ) + "\n"
-                                 )
-            dfs.index.name = "ix"
-            dfs = dfs[["state_id","averE","count","occ"]].sort_values(by="count", ascending=False)
-            dfs.to_csv(self.states_csv, index=True)
 
-            # insert comment about % returned states
-            note = (f"# Data for the {len(self.hb_states):,} saved hb_states whose sum count represents "
-                    f"{self.n_hb_space/self.n_space:.2%} of the state space ({self.n_space:,})")
-            subprocess_run(f"sed -i '1i {note}' {self.states_csv!s}", shell=True)
+            # prep hb states pairs output:
+            dfsp = pd.DataFrame.from_dict(states_pairs_dict,
+                                          orient="index",
+                                          columns=["count"]).reset_index()
+            dfsp[["Mi","Mj"]] = dfsp["index"].apply(lambda x: pd.Series([int(x[0]),
+                                                                         int(x[1])]))
+            dfsp[["donor","acceptor"]] = dfsp["index"].apply(
+                lambda x: pd.Series([self.iconf2confid[x[0]],
+                                     self.iconf2confid[x[1]]]))
+            dfsp["occ"] = (dfsp["count"]/self.n_hb_space).round(6)
+            dfsp = (dfsp[["Mi","Mj","donor","acceptor","count","occ"]]
+                    .sort_values(by=["count", "Mi"], ascending=[False, True])
+            )
+            with open(self.states_pairs_csv, "w") as fo:
+                fo.write("# States hb_pairs; last 2 columns: state count, occ\n")
+                dfsp.to_csv(fo, index=False)
+   
+            dfs = dfs[["state_id","averE","count","occ"]].sort_values(by="count",
+                                                                      ascending=False)
+            # build comment about % returned states
+            note = (f"# Data for the {len(self.hb_states):,} "
+                    "saved hb_states whose sum count represents "
+                    f"{self.n_hb_space/self.n_space:.2%} of the "
+                    f"state space ({self.n_space:,})\n"
+            )
+            with open(self.states_csv, "w") as fo:
+                fo.write(note)
+                dfs.to_csv(fo, index=False)
 
             print(("Main output files:\n"
-                   f"  {self.states_pairs_csv!s}: hb pairs with occ from hb state space\n"
+                   f"  {self.states_pairs_csv!s}: hb pairs with effective"
+                   "occ from hb state space\n"
                    f"  {self.states_csv!s}: hb states data\n"))
         return
 
