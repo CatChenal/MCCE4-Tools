@@ -137,10 +137,12 @@ class WeightedCorr:
         WeightedCorr call method.
         Args:
           method (str, "pearson"): Correlation method to be used:
-                                   'pearson' for pearson r, 'spearman' for spearman rank-order correlation.
+                                   'pearson' for pearson r, 'spearman' for spearman
+                                    rank-order correlation.
         Return:
-          - The correlation value as float if xyw, or (x, y, w) were passed to __init__;
-          - A m x m pandas.DataFrame holding the correlaton matrix if (df, wcol) were passed to __init__.
+          - The correlation value as float if xyw, or (x, y, w) was passed to __init__;
+          - A m x m pandas.DataFrame holding the correlaton matrix if (df, wcol) were
+            passed to __init__.
         """
         method = method.lower()
         if method not in CORR_METHODS:
@@ -190,7 +192,8 @@ def choose_res_data(top_df: pd.DataFrame, correl_resids: list) -> pd.DataFrame:
     return df
 
 
-def add_fixed_resoi_crg_to_topdf(top_df: pd.DataFrame, fixed_resoi_crg_df: pd.DataFrame,
+def add_fixed_resoi_crg_to_topdf(top_df: pd.DataFrame,
+                                 fixed_resoi_crg_df: pd.DataFrame,
                                  cms_wc_format: bool = False) -> pd.DataFrame:
 
     if fixed_resoi_crg_df is None or not fixed_resoi_crg_df.shape[0]:
@@ -209,6 +212,8 @@ def add_fixed_resoi_crg_to_topdf(top_df: pd.DataFrame, fixed_resoi_crg_df: pd.Da
         new_cols_dict[res] = np.repeat(fixed_resoi_crg_df.iloc[i, 1], n_rows)
 
     fixed_cols_df = pd.DataFrame(new_cols_dict)
+    # change index to Order
+    fixed_cols_df.index = fixed_cols_df.index + 1
 
     # Concatenate the original DataFrame parts with the new fixed residue columns
     df = pd.concat([top_df[top_res_cols], fixed_cols_df, top_df[top_tots_cols]], axis=1)
@@ -327,7 +332,6 @@ class CMSWC_Pipeline:
         self.top_df: pd.DataFrame = None
         self.fixed_resoi_crg_df: pd.DataFrame = None
 
-        # logger.info("Initializing CMSWC_Pipeline...")
         self._setup_paths_and_params()
 
         return
@@ -370,6 +374,7 @@ class CMSWC_Pipeline:
         # Instantiate the 'fast loader' class; with_tautomers=False (default)
         self.mc = MSout_np(self.h3_fp, self.msout_fp, mc_load="crg",
                            res_kinds=self.residue_kinds)
+
         self.mc.get_uniq_ms()
 
         # Validate correlation residues after loading data
@@ -446,6 +451,7 @@ class CMSWC_Pipeline:
             all_res_crg_df = add_fixed_resoi_crg_to_topdf(self.top_df,
                                                           self.fixed_resoi_crg_df,
                                                           cms_wc_format=True)
+            all_res_crg_df.index.name = "Order"
             all_res_crg_df.to_csv(self.output_dir.joinpath(
                 self.main_prms.get("all_crg_count_resoi_csv")))
 
@@ -459,7 +465,7 @@ class CMSWC_Pipeline:
 
         # Select data for chosen residues
         choose_res_data_df = choose_res_data(self.top_df, self.correl_resids)
-
+        choose_res_data_df.index.name = "Order"
         # Save the selected data
         csv_path = self.output_dir.joinpath(self.main_prms.get("res_of_interest_data_csv"))
         choose_res_data_df.to_csv(csv_path)
@@ -538,6 +544,7 @@ class CMSWC_Pipeline:
 
             if bounds_str:
                 bounds_str = bounds_str.strip()
+                # histogram0:
                 if bounds_str == "(None, None)" or "None" in bounds_str:
                     pass # Keep default ebounds
                 elif "Emin" in bounds_str:
@@ -576,13 +583,7 @@ class CMSWC_Pipeline:
             else:
                 logger.warning(f"No charge microstates found within bounds {ebounds} for '{title}'. Skipping histogram.")
 
-        resoi_cms = self.mc.get_resoi_cms(self.correl_resids)
-        if resoi_cms is not None and len(resoi_cms):
-            title = "Protonation MS Counts for Residues of Interest"
-            save_name = "crgms_logcount_resoi.png"
-            crgms_energy_histogram(resoi_cms, self.mc.CI.background_crg, title,
-                                   self.output_dir,
-                                   save_name=save_name, show=self.show_fig)
+        # Removed histogram "crgms_logcount_resoi.png": incorrect
 
         return
 

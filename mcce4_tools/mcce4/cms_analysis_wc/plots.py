@@ -5,13 +5,13 @@ Module: plots.py
 
   Plots for Protonation microstate analysis with weighted correlation.
 """
+import os
 from pathlib import Path
 import sys
 from typing import Tuple
 import warnings
 warnings.simplefilter("error", UserWarning)
 
-import os
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
 try:
     import matplotlib as mpl
@@ -74,15 +74,20 @@ def energy_distribution(
     graph_hist = plt.hist(energies, bins=100, alpha=0.6)
     Y = graph_hist[0]
     pdf_data = Y.max() / max(y) * y
-    plt.plot(energies, pdf_data, label="approx. skewnorm", color="indigo")
-    plt.title(f"{skewness= :.2f} {mean= :.2f} {std= :.2f}", fontsize=fs)
+    dist_label = ("approx. Boltzmann\n"
+                  "with skewnorm fit.\n"
+                 f"  skewness: {skewness:.2f}\n"
+                 f"  mean: {mean:.2f}\n"
+                 f"  std: {std:.2f}")
+    plt.plot(energies, pdf_data, label=dist_label, color="indigo")
     plt.xlabel(f"{kind_lbl} Microstate Energy (Kcal/mol)", fontsize=fs)
     plt.ylabel("Count", fontsize=fs)
     plt.yticks(fontsize=fs)
     plt.xticks(fontsize=fs)
     plt.tick_params(axis="x", direction="out", length=8, width=2)
     plt.tick_params(axis="y", direction="out", length=8, width=2)
-    plt.legend()
+    plt.legend(fontsize="large")
+
     fig_fp = out_dir.joinpath(save_name)
     fig.savefig(fig_fp, dpi=300, bbox_inches="tight")
 
@@ -139,7 +144,7 @@ def crgms_energy_histogram(
     )
     try:
         plt.yscale("log")
-        ax.set_ylabel("log$_{10}$(Count)", fontsize=fs)
+        ax.set_ylabel("Count", fontsize=fs)
     except UserWarning:
         plt.yscale("linear")
         ax.set_ylabel("Energy (Kcal/mol)", fontsize=fs)
@@ -193,13 +198,12 @@ def corr_heatmap(
         off_diag_mask = ~np.eye(corr_array.shape[0], dtype=bool)
         # Check if all off-diagonal elements are zero
         if np.all(corr_array[off_diag_mask] == 0):
-            logging.warning("All off-diagonal correlation values are 0.00: not plotting.")
+            print("Warning: All off-diagonal correlation values are 0: not plotting.")
             return
 
     if df_corr.shape[0] > 14 and fig_size == HEATMAP_SIZE:
-        logger.warning(
-            ("With a matrix size > 14 x 14, the fig_size argument" f" should be > {HEATMAP_SIZE}.")
-        )
+        print("Warning: With a matrix size > 14 x 14, the fig_size argument",
+              f"should be > {HEATMAP_SIZE}.")
 
     n_resample = 8
     top = mpl.colormaps["Reds_r"].resampled(n_resample)

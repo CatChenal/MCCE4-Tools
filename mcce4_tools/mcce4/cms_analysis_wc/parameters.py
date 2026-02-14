@@ -192,12 +192,6 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
     if correl_lines:
         crgms_dict["correl_resids"] = correl_lines
 
-    # p, e = crgms_dict.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
-    # ph = p.removeprefix("ph")
-    # eh = e.removesuffix("ms")
-    # crgms_dict["ph"] = ph
-    # crgms_dict["eh"] = eh
-
     charge_histograms = defaultdict(dict)
     remove_keys = []
     for k in crgms_dict:
@@ -225,12 +219,12 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
 
 
 def check_res_list(correl_lst: list, res_lst: list, conf_info: np.ndarray) -> list:
-    """Perform at most 2 checks on res_list depending on presence of the other arguments:
+    """Perform at most 2 checks on res_list depending on the other arguments:
     - Whether items in correl_lst are in res_list;
     - Whether items in the validated correl_lst are in the free conformers space.
     """
     if conf_info is None or not len(conf_info):
-        sys.exit("Lookup array 'conf_info' is empty")
+        sys.exit("Lookup array 'conf_info' is empty!")
 
     new = []
     for res in correl_lst:
@@ -240,7 +234,7 @@ def check_res_list(correl_lst: list, res_lst: list, conf_info: np.ndarray) -> li
             logger.warning(f"Ignoring {res!r} from correl_lst: {res[:3]} not in residue_kinds.")
     correl_lst = new
     if correl_lst:
-        free_ci = conf_info[np.where(conf_info[:, -3])==1]  # is_free field
+        free_ci = conf_info[np.where(conf_info[:, -3]==1)]  # is_free field
         correl2 = deepcopy(correl_lst)
         for cid in correl_lst:  # check confid field:
             if not len(free_ci[np.where(free_ci[:, 1] == cid)]):
