@@ -11,7 +11,6 @@ from itertools import islice
 import logging
 from pathlib import Path
 from pprint import pprint
-from shutil import copyfile
 import sys
 
 from mcce4.cms_analysis_wc import APP_NAME, IONIZABLES

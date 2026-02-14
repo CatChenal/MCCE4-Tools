@@ -86,7 +86,6 @@ S2PREF = "s2_"  # mcce pdb & pqr files prefix
 MIN_OCC = 0.0  # occupancy threshold
 N_TOP = 5  # default value for 'n_top' option
 TER = ["NTR", "CTR"]
-HIS0_tautomers = {0: "NE2", 1: "ND1", 2: 1}
 neutral_tautomers = ["NE2", "ND1", "OD1", "OD2", "OE2", "OE1", "HO", "HXT"]
 
 
@@ -333,20 +332,19 @@ def finalize_topN_df(top_df: pd.DataFrame) -> pd.DataFrame:
         top_df.drop(0, axis=0, inplace=True)
 
     msk = top_df["info"] == "totals"
-    res_df = pd.DataFrame(
-        sorted(
-            top_df[~msk].values, key=lambda x: (uppers.index(x[0][-5]), int(x[0][-4:]))
-        ),
-        columns=top_df.columns,
-    )
-    if res_df.shape[0]:
-        df = pd.concat([res_df, top_df[msk]], ignore_index=False)
+    if (~msk).any():
+        res_df = pd.DataFrame(
+            sorted(
+                top_df.loc[~msk].values, key=lambda x: (uppers.index(x[0][-5]), int(x[0][-4:]))
+            ),
+            columns=top_df.columns,
+        )
+        #if res_df.shape[0]:
+        df = pd.concat([res_df, top_df.loc[msk]], ignore_index=False)
         df["chain"] = get_chain(df)
         df["crg_changes"] = get_changing_crg(df)
     else:
-        logger.critical("No res_df data!")
-        print(f"finalize_topN_df: {top_df.shape = }\n", top_df, "\n")
-        sys.exit(1)
+        sys.exit(f"Critical: No residue data! [Function: finalize_topN_df: {top_df.shape = }]")
 
     return df
 
@@ -355,7 +353,7 @@ def filter_df_residue_kinds(df: pd.DataFrame, residue_kinds: list = IONIZABLE_RE
     """Display the content of df filtered by residue_kinds list."""
     tots = df["info"] == "totals"
     inkind = df["residues"].str[:3].isin(residue_kinds)
-    new = pd.concat([df[inkind], df[tots]]).replace(pd.NA, " ")
+    new = pd.concat([df.loc[inkind], df.loc[tots]]).replace(pd.NA, " ")
 
     return new
 
@@ -525,7 +523,7 @@ def write_tcrgms_pdbs(
     # isolate the series of associated ms indices:
     ids = top_df.iloc[0][:-1]
     # split df viz "totals" rows:
-    df_tots = top_df[top_df["info"] == "totals"]
+    df_tots = top_df.loc[top_df["info"] == "totals"]
 
     for i, c in enumerate(df_tots.columns[:-1]):
         idx = ids[c]
@@ -617,7 +615,7 @@ def extend_residue_kinds(res_kinds: list) -> list:
 
 def sort_resoi_list(res_kinds: list) -> list:
     """Return the input res_kinds (residues of interest, resoi) list
-    with ionizable residues in the same order as in mcce4.constants.IONIZABLE_RES,
+    together with ionizable residues in the same order as in mcce4.constants.IONIZABLE_RES,
     i.e.: acid, base, polar, N-ter, C-ter, followed by the other user 'residues'.
     """
     if not res_kinds:
@@ -687,30 +685,11 @@ class TopNCmsPipeline:
 
         return residue_kinds
 
-    def setup_environment(self, tool_prompt: bool = False):
-        # Logic for creating/checking output directory based on self.args.overwrite
+    def setup_environment(self):
         self.outname = get_output_dirname(self.args.ph, self.args.eh, self.args.n_top)
         self.output_dir = self.mcce_dir.joinpath(self.outname)
-        # ... directory handling logic ...
-        if self.output_dir.exists():
-            if tool_prompt:
-                ans = input(
-                    (
-                        f"The {self.outname} output folder already exists in {self.mcce_dir!s}.\n"
-                        "Would you like to proceed and rewrite this folder? y/n "
-                    )
-                )
-                self.args.overwrite = True if ans.strip().lower()[0] == "y" else False
+        self.output_dir.mkdir(exist_ok=True)
 
-            if not self.args.overwrite:
-                logger.info(
-                    "The %s output folder already exists in %s.\n & overwrite option is False. Exiting."
-                    % (self.outname, str(self.mcce_dir))
-                )
-                sys.exit()
-            rmdir(self.output_dir)
-
-        self.output_dir.mkdir()
         return
 
     def display_options(self):
@@ -725,7 +704,6 @@ Input options:
   Top N crg ms to process: {self.args.n_top};
   Occupancy threshold: {self.min_occ:.2%};
   Keep waters? {self.args.wet};
-  Overwrite existing files? {self.args.overwrite};
   Reduced number of ms data? {self.args.reduced_ms_rows};
   Output folder: {self.output_dir}
 """
@@ -735,7 +713,6 @@ Input options:
 
     def load_data(self):
         # Logic to get file paths and instantiate MSout_np
-        start_time = time.time()
         # h3_fp, step2_fp, msout_fp
         self.mcce_files = get_mcce_filepaths(self.mcce_dir, self.args.ph, self.args.eh)
         # using default mc_load="all": load ms and cms data:
@@ -747,7 +724,6 @@ Input options:
             with_tautomers=True,
             reduced_ms_rows=self.args.reduced_ms_rows,
         )
-        logger.info(self.mso)
 
         return
 
@@ -800,20 +776,23 @@ Input options:
     def write_tsv_and_summary(self):
         # Finalize DF, write TSV, write summary
         final_df = finalize_topN_df(self.top_df)
+        # added: res_kinds=self.residue_kinds
         tsv_fp = topNdf_to_tsv(self.output_dir, final_df, self.args.n_top)
+        #, res_kinds=self.residue_kinds)
         write_summary_file(tsv_fp, self.args.n_top, res_kinds=self.residue_kinds)
         msg = "".join(["Summary:\n", tsv_fp.parent.joinpath("summary.txt").read_text()])
         logger.info(msg)
 
         return
 
-    def run(self, tool_prompt: bool = False):
+    def run(self):
         # Orchestrates the pipeline call sequence
         start_time = time.time()
         logger.info(f"Starting {APP_NAME}...")
-        self.setup_environment(tool_prompt)
+        self.setup_environment()
         self.display_options()
         self.load_data()
+        print(self.mso)
         self.process_microstates()
         out_time = time.time()
         self.write_mcce_pdbs()
@@ -893,12 +872,6 @@ def cli_parser() -> ArgumentParser:
         help="Output files with waters; Default: %(default)s",
     )
     p.add_argument(
-        "--overwrite",
-        default=False,
-        action="store_true",
-        help="Overwrite existing output files; Default: %(default)s",
-    )
-    p.add_argument(
         "--reduced_ms_rows",
         default=False,
         action="store_true",
@@ -911,16 +884,15 @@ def cli_parser() -> ArgumentParser:
     return p
 
 
-def cli(argv=None, tool_prompt=False):
+def cli(argv=None):
     """Obtain the top N charge microstates from the mcce run dir
     given by the input pdb path and output their step2_out, pqr and pdb files, along
     a summary file, and a .tsv file of cms state vectors & totals.
     """
     clip = cli_parser()
     args = clip.parse_args(argv)
-    print(f">>> Start of {APP_NAME} processing pipeline...\n")
     pipeline = TopNCmsPipeline(args)
-    pipeline.run(tool_prompt=tool_prompt)
-    print(f"<<< End of{APP_NAME}.")
+    pipeline.run()
+    print("-"*80)
 
     return

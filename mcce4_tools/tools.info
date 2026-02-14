@@ -97,13 +97,15 @@ ms_sample2pdbs    :: Generate a random sample of MCCE microstates in mcce pdb fo
 
 ms_top2pdbs       :: Create pdb & pqr files for the topN tautomeric protonation microstates,
                      along with a summary file & a listing of the N charge vectors.
+                     Files in an existing output folder are overwritten.
                      Defaults:
-                     pH=7.0; n_top=5; min_occ=0.0; residue_kinds=ionizable res; --overwrite=False.
+                     pH=7.0; n_top=5; min_occ=0.0; residue_kinds=mcce4.constants.IONIZABLE_RES
                      Examples:
                       > ms_top2pdbs         # use all defaults
                       > ms_top2pdbs -eh 30  # Eh titration at ph7
                      Passing residues kinds: comma-separated; order & case insensitive:
                       > ms_top2pdbs -residue_kinds _CL,his,GLU
+                     Note: residue_kinds not in the default list are appended to it.
 --------------------------------------------------------------------------------------------------
 
 ms_split_msout    :: Obtain a reduced msout file, preserving the original as all_<msout_file>.
