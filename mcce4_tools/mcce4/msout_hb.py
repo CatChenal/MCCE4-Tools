@@ -1075,8 +1075,8 @@ class MSout_hb:
             dfp[["res_d","res_a"]] = dfp["index"].apply(
                 lambda x: pd.Series([get_resid(self.iconf2confid[x[0]]),
                                      get_resid(self.iconf2confid[x[1]])]))
-            dfp_res = dfp.groupby(["res_d","res_a"], as_index=False).agg({"count": "mean",
-                                                                          "occ": "mean"})
+            dfp_res = dfp.groupby(["res_d","res_a"], as_index=False).agg({"count": "sum",
+                                                                          "occ": "sum"})
             dfp_res["count"] = dfp_res["count"].astype("int32")
             dfp_res = dfp_res.sort_values(by="count", ascending=False)
             dfp_res.to_csv(pairs_res_fp, index=False)
