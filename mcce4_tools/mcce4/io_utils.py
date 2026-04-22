@@ -151,7 +151,7 @@ def get_msout_size_info(msout_fp: Path,
     # to implement skipping accepted states every n lines:
     # lines count is approximate
     n_lines = int(out[-1].split()[0]) - N_HDR - 4  # - 2 if method not monte
-    n_skip_lines = int(np.floor(n_lines / n_target_states))
+    n_skip_lines = max(1, int(np.floor(n_lines / n_target_states)))
     if verbose:
         print(f"Microstates to be saved every {n_skip_lines:,} lines",
             f"({n_lines=:,} / {n_target_states=:,})")

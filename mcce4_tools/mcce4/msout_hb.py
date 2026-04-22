@@ -467,6 +467,8 @@ class MSout_hb:
         self.mc_lines, self.n_skip, self.n_MC = get_msout_size_info(self.msout_fp,
                                                 n_target_states=n_target_states)
         print(f"Approximate number of lines in msout file: {self.mc_lines:,}")
+        if self.n_skip == 1:
+            print("Warning: Returning all hb_states and printing every 5000th accepted state.")
 
         # data from the msout file 'header':
         self.HDR = MsoutHeaderData(self.msout_fp)
@@ -1102,6 +1104,7 @@ class MSout_hb:
             dfs["averE"] = dfs["averE"].round(3)
             dfs["occ"] = dfs["occ"].round(6)
             dfs["state_id"] = None
+            
             for rx, ro in dfs.iterrows():
                 # convert conf indices to confids:
                 dfs.loc[rx,"state_id"] = ",".join(
@@ -1111,6 +1114,8 @@ class MSout_hb:
                 for tpl in ro["index"]:
                     states_pairs_dict[tpl] += ro["count"]
 
+            dfs = dfs[["state_id","averE","count","occ"]].sort_values(by="count",
+                                                                      ascending=False)
             # prep hb states pairs output:
             dfsp = pd.DataFrame.from_dict(states_pairs_dict,
                                           orient="index",
@@ -1122,14 +1127,14 @@ class MSout_hb:
                                      self.iconf2confid[x[1]]]))
             dfsp["occ"] = (dfsp["count"]/self.n_hb_space).round(6)
             dfsp = (dfsp[["Mi","Mj","donor","acceptor","count","occ"]]
-                    .sort_values(by=["count", "Mi"], ascending=[False, True])
+                     .sort_values(by=["count", "Mi", "Mj"],
+                                  ascending=[False, True, True])
             )
+            dfsp = dfsp[["Mi","Mj","donor","acceptor","count","occ"]]
             with open(self.states_pairs_csv, "w") as fo:
                 fo.write("# States hb_pairs; last 2 columns: state count, occ\n")
                 dfsp.to_csv(fo, index=False)
    
-            dfs = dfs[["state_id","averE","count","occ"]].sort_values(by="count",
-                                                                      ascending=False)
             # build comment about % returned states
             note = (f"# Data for the {len(self.hb_states):,} "
                     "saved hb_states whose sum count represents "
