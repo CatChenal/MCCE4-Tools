@@ -3,10 +3,13 @@
 import argparse
 import csv
 import math
+import multiprocessing
+import os
 import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from functools import partial
 from pathlib import Path
 import networkx as nx
 
@@ -16,8 +19,8 @@ parser = argparse.ArgumentParser(
                 'conformer-level pairs) or the aggregated residue-level CSV '
                 '(state_normalized column from hb_state_aggregate.py). Builds '
                 'an H-bond graph per microstate and searches for networks using '
-                'one of two modes: -resi_list reports connected subnetworks '
-                'containing any listed residue; -resi_start_stop finds shortest '
+                'one of two modes: -resi_list finds paths containing all listed '
+                'residues (or any with --any); -resi_start_stop finds shortest '
                 'paths from entry to exit residues and ranks them by Arrhenius '
                 'rate and energy with pairwise and uncorrelated statistics.')
 parser.add_argument('input_csv', metavar='input.csv',
@@ -25,7 +28,8 @@ parser.add_argument('input_csv', metavar='input.csv',
                          'or aggregated (state_normalized,hb_count,count,occ)')
 parser.add_argument('-resi_list', metavar='FILE',
                     help='Text file with residues of interest (one per line). '
-                         'Reports connected subnetworks containing any listed residue.')
+                         'Reports paths containing all listed residues (use --any '
+                         'to keep paths with at least one).')
 parser.add_argument('-resi_start_stop', metavar='FILE',
                     help='Tab-separated file with ENTRY/EXIT columns. '
                          'Header: ENTRY<tab>EXIT. Each line: ENTRY_RES<tab>EXIT_RES '
@@ -42,6 +46,12 @@ parser.add_argument('--include_bk', action='store_true',
 parser.add_argument('--confs', action='store_true',
                     help='Build networks at the conformer level instead of residue level '
                          '(only effective with raw MCCE hb_states input)')
+parser.add_argument('--any', action='store_true',
+                    help='With -resi_list, keep paths containing at least one '
+                         'listed residue instead of requiring all of them')
+parser.add_argument('-cpus', type=int, default=4,
+                    metavar='N',
+                    help='Number of parallel worker processes (default: 4)')
 parser.add_argument('-A', type=float, default=1e13,
                     help='Arrhenius pre-exponential factor in /sec (default: 1e13)')
 args = parser.parse_args()
@@ -216,7 +226,8 @@ def extract_conformer_pdb_lines(step2_path, conformer_ids):
             conf_m = re.search(r'_(\d+)$', cid)
             conf_num = conf_m.group(1) if conf_m else None
             needed.add((chain, resnum, conf_num))
-            needed.add((chain, resnum, '000'))
+            if m.group(1) not in ('HOH', 'WAT'):
+                needed.add((chain, resnum, '000'))
 
     lines = []
     with open(step2_path) as f:
@@ -254,6 +265,52 @@ def extract_residue_pdb_lines(step2_path, residue_names):
                     lines.append(line)
                     break
     return lines
+
+
+def filter_water_conformers(pdb_lines, preferred_conf_ids=None):
+    non_water = []
+    water_by_resi = defaultdict(lambda: defaultdict(list))
+
+    for line in pdb_lines:
+        resname = line[17:20].strip()
+        if resname in ('HOH', 'WAT'):
+            chain = line[21].strip()
+            resnum = line[22:26].strip()
+            conf = line[27:30].strip()
+            water_by_resi[(chain, resnum)][conf].append(line)
+        else:
+            non_water.append(line)
+
+    preferred = {}
+    if preferred_conf_ids:
+        for cid in preferred_conf_ids:
+            stripped = RE_CONFORMER_NUM.sub('', cid)
+            m = RE_RESIDUE_CORE.search(stripped)
+            if not m or m.group(1) not in ('HOH', 'WAT'):
+                continue
+            chain = m.group(2)[0]
+            resnum = m.group(2)[1:]
+            conf_m = re.search(r'_(\d+)$', cid)
+            if conf_m:
+                preferred[(chain, resnum)] = conf_m.group(1)
+
+    for (chain, resnum), conf_dict in water_by_resi.items():
+        chosen = preferred.get((chain, resnum))
+        if chosen and chosen in conf_dict:
+            non_water.extend(conf_dict[chosen])
+            continue
+        candidates = {k: v for k, v in conf_dict.items() if k != '000'}
+        if not candidates:
+            candidates = conf_dict
+        try:
+            chosen = max(candidates,
+                         key=lambda c: sum(float(ln[54:60])
+                                           for ln in candidates[c]))
+        except (ValueError, IndexError):
+            chosen = min(candidates)
+        non_water.extend(conf_dict[chosen])
+
+    return non_water
 
 
 def print_and_write(fh, text):
@@ -499,6 +556,8 @@ def write_ranked_output(top_networks, pairwise_counts, state_edge_sets,
             else:
                 pdb_lines = extract_residue_pdb_lines(str(step2_path), nodes)
 
+        pdb_lines = filter_water_conformers(pdb_lines, conf_ids)
+
         with open(net_pdb_path, 'w') as pdb_out:
             pdb_out.writelines(pdb_lines)
             pdb_out.write('END\n')
@@ -513,15 +572,17 @@ def write_ranked_output(top_networks, pairwise_counts, state_edge_sets,
             net_obj = f'Network{idx}'
             pml.write(f'load {net_pdb_path.resolve()}, {net_obj}\n')
             pml.write(f'show sticks, {net_obj}\n')
-            pml.write(f'util.cbay {net_obj}\n')
-            pml.write(f'show spheres, {net_obj} and resn HOH+WAT\n')
-            pml.write(f'set sphere_scale, 0.3, {net_obj} and resn HOH+WAT\n')
+            pml.write(f'util.cbag {net_obj}\n')
+            pml.write(f'show spheres, {net_obj} and resn HOH+WAT and name O\n')
+            pml.write(f'set sphere_scale, 0.2, {net_obj} and resn HOH+WAT and name O\n')
+            pml.write(f'show sticks, {net_obj} and resn HOH+WAT and name H+H1+H2\n')
             pml.write(f'label {net_obj} and name CA+O and not resn HOH+WAT, '
                       f'"%s %s%s" % (resn, chain, resi)\n')
             pml.write(f'label {net_obj} and name O and resn HOH+WAT, '
                       f'"%s %s%s" % (resn, chain, resi)\n')
             pml.write(f'set label_size, 12\n\n')
 
+            arrow_data = []
             for i, (a, b) in enumerate(edges):
                 entry = hb_entries[i]
                 hb_label = f'hb{idx}_{i+1}'
@@ -545,6 +606,15 @@ def write_ranked_output(top_networks, pairwise_counts, state_edge_sets,
                               f'pos=[{c2[0]:.3f}, {c2[1]:.3f}, {c2[2]:.3f}]\n')
                     pml.write(f'distance {hb_label}, pt_{hb_label}_d, pt_{hb_label}_a\n')
                     pml.write(f'hide everything, pt_{hb_label}_d or pt_{hb_label}_a\n')
+
+                    if args.confs:
+                        donor_is_a = (donor == a)
+                    else:
+                        donor_is_a = (normalize_residue(donor) == a)
+                    if donor_is_a:
+                        arrow_data.append((f'arrow_{hb_label}', c1, c2))
+                    else:
+                        arrow_data.append((f'arrow_{hb_label}', c2, c1))
                 else:
                     a_info = parse_resi_for_pymol(a)
                     b_info = parse_resi_for_pymol(b)
@@ -555,11 +625,44 @@ def write_ranked_output(top_networks, pairwise_counts, state_edge_sets,
                                   f'{net_obj} and chain {b_info[1]} and resi {b_info[2]}\n')
                 pml.write('\n')
 
-            pml.write(f'set dash_color, cyan, hb{idx}_*\n')
+            pml.write(f'set_color darkorange, [0.9, 0.45, 0.0]\n')
+            pml.write(f'set dash_color, darkorange, hb{idx}_*\n')
             pml.write(f'set dash_gap, 0.3, hb{idx}_*\n')
             pml.write(f'set dash_length, 0.15, hb{idx}_*\n')
             pml.write(f'set label_color, black, hb{idx}_*\n')
             pml.write(f'set dash_width, 3.0, hb{idx}_*\n\n')
+
+            if arrow_data:
+                pml.write('python\n')
+                pml.write('from pymol.cgo import BEGIN, END, LINES, VERTEX, COLOR, LINEWIDTH\n')
+                pml.write('from pymol import cmd\n')
+                pml.write('import math\n\n')
+                for arrow_name, start, end in arrow_data:
+                    pml.write(f'x1,y1,z1 = {start[0]:.3f},{start[1]:.3f},{start[2]:.3f}\n')
+                    pml.write(f'x2,y2,z2 = {end[0]:.3f},{end[1]:.3f},{end[2]:.3f}\n')
+                    pml.write(f'dx,dy,dz = x2-x1, y2-y1, z2-z1\n')
+                    pml.write(f'L = math.sqrt(dx*dx+dy*dy+dz*dz)\n')
+                    pml.write(f'if L > 0.001:\n')
+                    pml.write(f'    ux,uy,uz = dx/L, dy/L, dz/L\n')
+                    pml.write(f'    ref = (1,0,0) if abs(ux) < 0.9 else (0,1,0)\n')
+                    pml.write(f'    px = uy*ref[2]-uz*ref[1]\n')
+                    pml.write(f'    py = uz*ref[0]-ux*ref[2]\n')
+                    pml.write(f'    pz = ux*ref[1]-uy*ref[0]\n')
+                    pml.write(f'    pL = math.sqrt(px*px+py*py+pz*pz)\n')
+                    pml.write(f'    px,py,pz = px/pL,py/pL,pz/pL\n')
+                    pml.write(f'    al,aw = 0.55,0.5\n')
+                    pml.write(f'    w1 = [x2-ux*al+px*aw, y2-uy*al+py*aw, z2-uz*al+pz*aw]\n')
+                    pml.write(f'    w2 = [x2-ux*al-px*aw, y2-uy*al-py*aw, z2-uz*al-pz*aw]\n')
+                    pml.write(f'    obj = [LINEWIDTH, 7.0,\n')
+                    pml.write(f'           BEGIN, LINES,\n')
+                    pml.write(f'           COLOR, 0.3, 0.6, 1.0,\n')
+                    pml.write(f'           VERTEX, w1[0], w1[1], w1[2],\n')
+                    pml.write(f'           VERTEX, x2, y2, z2,\n')
+                    pml.write(f'           VERTEX, w2[0], w2[1], w2[2],\n')
+                    pml.write(f'           VERTEX, x2, y2, z2,\n')
+                    pml.write(f'           END]\n')
+                    pml.write(f'    cmd.load_cgo(obj, "{arrow_name}")\n\n')
+                pml.write('python end\n\n')
 
             pml.write(f'zoom {net_obj}, 8\n')
             pml.write('deselect\n')
@@ -579,6 +682,116 @@ def write_ranked_output(top_networks, pairwise_counts, state_edge_sets,
                 print(f'  Network {idx}: PyMOL timed out, .pml script saved: {pml_path}')
 
     print(f'PyMOL scripts/sessions saved in: {out_dir}')
+
+
+def _chunk_list(lst, n):
+    k, m = divmod(len(lst), n)
+    return [lst[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in range(n)]
+
+
+def _merge_results(results):
+    network_counts = Counter()
+    pairwise_counts = defaultdict(int)
+    state_edge_sets = []
+    match_count = 0
+    for nc, pc, ses, mc in results:
+        network_counts += nc
+        for k, v in pc.items():
+            pairwise_counts[k] += v
+        state_edge_sets.extend(ses)
+        match_count += mc
+    return network_counts, pairwise_counts, state_edge_sets, match_count
+
+
+def _process_resi_list_chunk(chunk, resi_set, net_min, cutoff, use_any):
+    network_counts = Counter()
+    pairwise_counts = defaultdict(int)
+    state_edge_sets = []
+    states_with_matches = 0
+
+    for row in chunk:
+        state_str = row['state_normalized']
+        count = int(row['count'])
+        G = parse_state_graph(state_str)
+
+        edge_set = set()
+        for a, b in G.edges():
+            edge = (min(a, b), max(a, b))
+            pairwise_counts[edge] += count
+            edge_set.add(edge)
+        state_edge_sets.append((edge_set, count))
+
+        found_any = False
+        for comp in nx.connected_components(G):
+            comp_resi = resi_set & comp
+            if not comp_resi:
+                continue
+            sub = G.subgraph(comp)
+            comp_nodes = sorted(comp)
+            for ni, n_start in enumerate(comp_nodes):
+                for n_end in comp_nodes[ni + 1:]:
+                    for path in nx.all_simple_paths(sub, n_start, n_end,
+                                                    cutoff=cutoff):
+                        if len(path) < net_min:
+                            continue
+                        path_set = set(path)
+                        if use_any:
+                            if not (comp_resi & path_set):
+                                continue
+                        else:
+                            if not (comp_resi <= path_set):
+                                continue
+                        network_counts[' -> '.join(path)] += count
+                        found_any = True
+        if found_any:
+            states_with_matches += 1
+
+    return network_counts, dict(pairwise_counts), state_edge_sets, states_with_matches
+
+
+def _process_start_stop_chunk(chunk, entry_set, exit_set, net_min, net_max):
+    network_counts = Counter()
+    pairwise_counts = defaultdict(int)
+    state_edge_sets = []
+    states_with_paths = 0
+    cutoff = net_max - 1 if net_max is not None else None
+
+    for row in chunk:
+        state_str = row['state_normalized']
+        count = int(row['count'])
+        G = parse_state_graph(state_str)
+        nodes = set(G.nodes())
+
+        edge_set = set()
+        for a, b in G.edges():
+            edge = (min(a, b), max(a, b))
+            pairwise_counts[edge] += count
+            edge_set.add(edge)
+        state_edge_sets.append((edge_set, count))
+
+        entries_in = entry_set & nodes
+        exits_in = exit_set & nodes
+        if not entries_in or not exits_in:
+            continue
+
+        found_any = False
+        for e_start in sorted(entries_in):
+            for e_end in sorted(exits_in):
+                if e_start == e_end:
+                    continue
+                if not nx.has_path(G, e_start, e_end):
+                    continue
+                paths = nx.all_simple_paths(G, e_start, e_end,
+                                            cutoff=cutoff)
+                for path in paths:
+                    if len(path) < net_min:
+                        continue
+                    network_counts[' -> '.join(path)] += count
+                    found_any = True
+        if found_any:
+            states_with_paths += 1
+
+    return network_counts, dict(pairwise_counts), state_edge_sets, states_with_paths
 
 
 # ---------------------------------------------------------------------------
@@ -639,42 +852,18 @@ if args.resi_list:
     print(f'\nScanning for networks containing listed residues '
           f'({net_min} to {max_label} nodes) ...')
 
-    network_counts = Counter()
-    pairwise_counts = defaultdict(int)
-    state_edge_sets = []
-    states_with_matches = 0
     cutoff = net_max - 1 if net_max is not None else None
+    n_workers = min(args.cpus, len(states))
+    chunks = _chunk_list(states, n_workers)
+    worker = partial(_process_resi_list_chunk, resi_set=resi_set,
+                     net_min=net_min, cutoff=cutoff, use_any=args.any)
 
-    for row in states:
-        state_str = row['state_normalized']
-        count = int(row['count'])
-        G = parse_state_graph(state_str)
+    print(f'  Using {len(chunks)} worker processes ...')
+    with multiprocessing.Pool(len(chunks)) as pool:
+        results = pool.map(worker, chunks)
 
-        edge_set = set()
-        for a, b in G.edges():
-            edge = (min(a, b), max(a, b))
-            pairwise_counts[edge] += count
-            edge_set.add(edge)
-        state_edge_sets.append((edge_set, count))
-
-        found_any = False
-        for comp in nx.connected_components(G):
-            if not (resi_set & comp):
-                continue
-            sub = G.subgraph(comp)
-            comp_nodes = sorted(comp)
-            for ni, n_start in enumerate(comp_nodes):
-                for n_end in comp_nodes[ni + 1:]:
-                    for path in nx.all_simple_paths(sub, n_start, n_end,
-                                                    cutoff=cutoff):
-                        if len(path) < net_min:
-                            continue
-                        if not (resi_set & set(path)):
-                            continue
-                        network_counts[' -> '.join(path)] += count
-                        found_any = True
-        if found_any:
-            states_with_matches += 1
+    network_counts, pairwise_counts, state_edge_sets, states_with_matches = \
+        _merge_results(results)
 
     print(f'  States with at least one path: {states_with_matches:,}')
     print(f'  Unique networks found: {len(network_counts):,}')
@@ -708,46 +897,17 @@ if args.resi_start_stop:
 
     print(f'Scanning {len(states):,} states for entry->exit networks ...')
 
-    network_counts = Counter()
-    pairwise_counts = defaultdict(int)
-    state_edge_sets = []
-    states_with_paths = 0
+    n_workers = min(args.cpus, len(states))
+    chunks = _chunk_list(states, n_workers)
+    worker = partial(_process_start_stop_chunk, entry_set=entry_set,
+                     exit_set=exit_set, net_min=net_min, net_max=net_max)
 
-    for i, row in enumerate(states):
-        state_str = row['state_normalized']
-        count = int(row['count'])
-        G = parse_state_graph(state_str)
-        nodes = set(G.nodes())
+    print(f'  Using {len(chunks)} worker processes ...')
+    with multiprocessing.Pool(len(chunks)) as pool:
+        results = pool.map(worker, chunks)
 
-        edge_set = set()
-        for a, b in G.edges():
-            edge = (min(a, b), max(a, b))
-            pairwise_counts[edge] += count
-            edge_set.add(edge)
-        state_edge_sets.append((edge_set, count))
-
-        entries_in = entry_set & nodes
-        exits_in = exit_set & nodes
-        if not entries_in or not exits_in:
-            continue
-
-        found_any = False
-        for e_start in sorted(entries_in):
-            for e_end in sorted(exits_in):
-                if e_start == e_end:
-                    continue
-                if not nx.has_path(G, e_start, e_end):
-                    continue
-                cutoff = net_max - 1 if net_max is not None else None
-                paths = nx.all_simple_paths(G, e_start, e_end,
-                                            cutoff=cutoff)
-                for path in paths:
-                    if len(path) < net_min:
-                        continue
-                    network_counts[' -> '.join(path)] += count
-                    found_any = True
-        if found_any:
-            states_with_paths += 1
+    network_counts, pairwise_counts, state_edge_sets, states_with_paths = \
+        _merge_results(results)
 
     print(f'  States with at least one path: {states_with_paths:,}')
     print(f'  Unique networks found: {len(network_counts):,}')
