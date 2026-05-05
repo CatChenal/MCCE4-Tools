@@ -8,7 +8,8 @@ from typing import Tuple, Union
 
 import pandas as pd
 
-from mcce4.constants import pqr_frmt, ACIDIC_RES, NEUTRAL_RES, CLI_EPILOG
+from mcce4 import CLI_EPILOG
+from mcce4.constants import pqr_frmt, ACIDIC_RES, NEUTRAL_RES
 from mcce4.io_utils import parse_mcce_line
 
 

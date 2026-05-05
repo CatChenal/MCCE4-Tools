@@ -28,7 +28,8 @@ from typing import Tuple
 
 import pandas as pd
 
-from mcce4.constants import CANONICAL, CLI_EPILOG
+from mcce4 import CLI_EPILOG
+from mcce4.constants import CANONICAL
 import mcce4.io_utils as mciou
 
 

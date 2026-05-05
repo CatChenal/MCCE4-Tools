@@ -69,9 +69,10 @@ except ImportError as e:
     print(f"CRITICAL: Oops! Forgot to activate an appropriate environment?\n{e}")
     sys.exit(1)
 
+from mcce4 import CLI_EPILOG
+from mcce4.constants import CANONICAL, IONIZABLE_RES, ALL_RES
 from mcce4.io_utils import get_mcce_filepaths, parse_mcce_line, show_elapsed_time
 from mcce4.msout_np import MSout_np
-from mcce4.constants import CANONICAL, IONIZABLE_RES, ALL_RES, CLI_EPILOG
 
 
 # entry point name in MCCE_bin:
