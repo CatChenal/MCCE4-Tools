@@ -28,7 +28,7 @@ from pathlib import Path
 import time
 from typing import TextIO
 
-from mcce4.constants import CLI_EPILOG
+from mcce4 import CLI_EPILOG
 from mcce4.io_utils import get_unique_filename, get_mcce_filepaths
 import mcce4.ms_analysis as msa
 

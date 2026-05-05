@@ -22,7 +22,7 @@ import shutil
 import sys
 from typing import List, Union
 
-from mcce4.constants import CLI_EPILOG
+from mcce4 import CLI_EPILOG
 from mcce4.io_utils import get_mcce_filepaths
 from mcce4.io_utils import subprocess_run, CalledProcessError
 
