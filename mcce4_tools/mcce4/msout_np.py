@@ -1053,7 +1053,7 @@ class MSout_np:
 
         return filtered
 
-    def n_ms_to_ooc_pct(self, occ_pct: list=[50, 90]) -> str:
+    def n_ms_to_occ_pct(self, occ_pct: list=[50, 90]) -> str:
         """
         Return a string giving the number of (c)ms needed to reach an occ of 50%, 90%, etc.
         """
@@ -1385,6 +1385,6 @@ class MSout_np:
                 )
         if self.HDR.is_monte:
             out = out + f"State space: {self.N_space:,}\n"
-            out = out + self.n_ms_to_ooc_pct()
+            out = out + self.n_ms_to_occ_pct()
 
         return out
