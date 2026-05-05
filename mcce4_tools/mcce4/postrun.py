@@ -238,9 +238,13 @@ def get_bench_postrun_reports(run_dir) -> dict:
     then collate all the bad ones into a single file.
     Return a summarizing dict.
     """
-    bench_dir = Path(run_dir)
     summary = defaultdict(list)
-    for d in bench_dir.joinpath("runs").iterdir():
+    if Path(run_dir).joinpath("runs").is_dir():
+        bench_dir = Path(run_dir).joinpath("runs")
+    else:
+        bench_dir = Path(run_dir)
+    
+    for d in bench_dir.iterdir():
         if not d.is_dir():
             continue
         get_postrun_report(d, summary=summary)
@@ -307,7 +311,8 @@ def pr_cli(argv = None):
         "--is_benchmark",
         default=False,
         action="store_true",
-        help="The given run_dir is a benchmark dir; default: %(default)s.",
+        help="If given, the program will check for a possible 'runs' subfolder, " \
+        "which may have been setup by the benchmark app.; default: %(default)s.",
     )
 
     args = p.parse_args(argv)
