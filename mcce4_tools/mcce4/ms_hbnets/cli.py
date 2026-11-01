@@ -44,6 +44,9 @@ PLOTTING_ARGS = [
     'data_map_color',
     'figsize_data',
     'figsize_data_bk',
+    'split_labels',
+    'split_x',
+    'split_y',
     'figsize_corr',
     'figsize_corr_bk',
     'figsize_donor_corr',
@@ -198,10 +201,10 @@ Takes precedence over -pairs-of-interest-csv if given. String must be quoted whe
 Extended string: AA+ or "AA|XYZ<sep>abc" where <sep> is one of these characters: {VALID_COFACTOR_SEPS!r}
 Examples:
  -res-of-interest EHK             # no res bk, no cofactors
- -res-of-interest EHK+BK          # string contains '+' => keep res bk; Note: + is suffcient
- -res-of-interest "EHK+|HOH 4pti" # keep res bk, water and 4PTI cofactor
- -res-of-interest "EHK|HOH;abc"   # no res bk, water and ABC cofactor
- -res-of-interest "|HOH,abc"      # no res, water and ABC cofactor
+ -res-of-interest EHK+            # keep res bk, no cofactors
+ -res-of-interest "EHK+|HOH PL9"  # keep res bk, water and PL9 cofactor
+ -res-of-interest "EHK|HOH.pl9"   # no res bk, water and PL9 cofactor
+ -res-of-interest "|HOH,PL9"      # no res, water and PL9 cofactor
 Note:
   When filtering with residues, it is very likely that -figsize-data must be reduced, ex: -figsize-data 5,5
 """
@@ -411,6 +414,16 @@ Size of the states Acceptors correlation heatmap; Default: %(default)s"""
                       help="""Divide the pairs into res-res and res-bk groups and 
 compute each group correlation. Always true if no pairs of interest given; Default: %(default)s""",
     )
+    sub2.add_argument("--split-x",
+                    action="store_true",
+                    default=False,
+                    help="Stack x-axis labels vertically instead of inline ('AS24|AN27'); Default: %(default)s"
+                    )
+    sub2.add_argument("--split-y",
+                    action="store_true",
+                    default=False,
+                    help="Stack y-axis labels vertically instead of inline ('AS24|AN27'); Default: %(default)s"
+                    )
     sub2.add_argument("--do-states-da-corr",
                       action="store_true",
                       default=False,

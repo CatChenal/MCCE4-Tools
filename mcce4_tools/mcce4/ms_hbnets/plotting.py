@@ -7,6 +7,7 @@ Codebase: mcce4/ms_hbnets/plotting.py
 """
 import logging
 from pathlib import Path
+from re import search
 
 import matplotlib as mpl
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -19,6 +20,26 @@ DEFAULT_FIGSIZE = (7,7)  # uniq donors, uniq acceptors counts < 30
 # single color
 COLOR_GRADIENTS = ['Blues','Greens','Greys','Oranges','Purples','Reds']
 AVAIL_COLORS = ", ".join(c for c in COLOR_GRADIENTS)
+
+
+def _split_label_text(text: str) -> str:
+    """Split states pairs label at '|'
+    match = search(r"[ \-]", text)
+    if match:
+      idx = match.start()
+      return text[:idx] + "\n" + text[idx + 1 :]
+    """
+    return text.replace("|", "\n")
+
+
+def split_ids(ticklabels: list) -> list:
+    for label in ticklabels:
+        txt = label.get_text()
+        if "|" not in txt:
+            continue
+        label.set_text(_split_label_text(txt))
+
+    return ticklabels
 
 
 def despine(ax = None, which=['top','right']):
@@ -97,7 +118,9 @@ def plot_heatmap(df: pd.DataFrame,
                  ax=None, fig=None,
                  map_kind: str = "data",
                  min_bound: float = 0.0,
-                 color: str = "Blues"   # data heatmap
+                 color: str = "Reds",   # data heatmap
+                 split_x: bool = False,
+                 split_y: bool = False,
                  ):
     """Draw the pcolormesh heatmap on the provided Axis.
     pcolormesh can handle unevenly spaced or skewed (non-rectilinear) grids.
@@ -136,7 +159,7 @@ def plot_heatmap(df: pd.DataFrame,
                             boundaries=bnorm, 
                             orientation='vertical',
                             pad=0.02,    # closer to plot
-                            shrink=0.75,  # Shrinks the height to 80% of the axis height
+                            shrink=0.65,  # Shrinks the height to 65% of the axis height
                             aspect=30,   # Higher number makes the width thinner (default is 20)
     )
     cb.outline.set_linewidth(0)
@@ -152,12 +175,21 @@ def plot_heatmap(df: pd.DataFrame,
         except AttributeError:
             pass
 
-    # Possibly rotate them if they overlap
-    xtl = ax.get_xticklabels()
-    if axis_ticklabels_overlap(xtl):
-        plt.setp(xtl, rotation="vertical")
-    #if axis_ticklabels_overlap(ytl):
-    #    plt.setp(ytl, rotation="horizontal")
+    if split_x:
+        xtl = split_ids(ax.get_xticklabels())
+        ax.set_xticklabels(xtl)
+    if split_y:
+        ytl = split_ids(ax.get_yticklabels())
+        ax.set_yticklabels(ytl)
+
+    if not (split_x or split_y):
+        # Possibly rotate them if they overlap
+        xtl = ax.get_xticklabels()
+        if axis_ticklabels_overlap(xtl):
+            plt.setp(xtl, rotation="vertical")
+        # ytl = ax.get_yticklabels()
+        # if axis_ticklabels_overlap(ytl):
+        #    plt.setp(ytl, rotation="horizontal")
 
     # Add the axis labels
     ax.set(xlabel=df.columns.name, ylabel=df.index.name)
@@ -196,6 +228,8 @@ def heatmap_from_df(df: pd.DataFrame,
                     map_kind: str = "data",
                     min_bound: float = 0.0,
                     color: str = "Reds",   # data heatmap
+                    split_x: bool = False,
+                    split_y: bool = False,
                     #ticklabels_fontsize: int = None,
                     ):
     """Wrapper function to plot_heatmap: Creates fig & ax prior to call;
@@ -203,10 +237,13 @@ def heatmap_from_df(df: pd.DataFrame,
     """
     figsize = maybe_resize(fig_size, df.shape)
     fig, ax = plt.subplots(1,1, figsize=figsize, layout='constrained')
+    
     plot_heatmap(df, ax=ax, fig=fig,
                  map_kind=map_kind,
                  min_bound=min_bound,
-                 color=color
+                 color=color,
+                 split_x=split_x,
+                 split_y=split_y,
                  )
 
     ax.set_title(title, fontdict={'weight':'bold', "size":10})

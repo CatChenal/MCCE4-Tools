@@ -106,17 +106,24 @@ def num_prec(num: Union[float, int]) -> int:
 
 
 def get_resid(confid:str) -> str:
-    """Return the one-letter resid from the confid:
-    THR01A0051_001 -> T_A51
-    ASPBKA0052_000 -> DBK_A52
+    """Return the one-letter resid from the confid in this format:
+    <chain><res><num>
+    Examples:
+        THR01A0051_001 -> AT51
+        THR01_0051_001 -> XT51
+        ASPBKA0052_000 -> ADBK52
+        HOH01A1016_001 -> Aw1016
     """
     id1 = res3_to_res1.get(confid[:3], confid[:3])
     if id1 == "HOH":
         id1 = "w"
+    chn = confid[5]
+    if chn == "_":
+        chn = "X"
     if confid[3:5] == "BK":
-        return f"{id1}BK_{confid[5]}{int(confid[6:-4])}"
+        return f"{chn}{id1}BK{int(confid[6:-4])}"
     else:
-        return f"{id1}_{confid[5]}{int(confid[6:-4])}"
+        return f"{chn}{id1}{int(confid[6:-4])}"
 
 
 def group_confids_into_resids(df: pd.DataFrame) -> pd.DataFrame:
