@@ -13,9 +13,10 @@ from collections import defaultdict
 import logging
 from multiprocessing import Pool
 from pathlib import Path
-from re import split as re_split, findall
+from re import split as re_split, findall, search
 from tempfile import TemporaryDirectory
 from time import time
+from turtle import width
 from typing import Tuple, Union
 
 import numpy as np
@@ -33,18 +34,21 @@ from mcce4.ms_hbnets.plotting import heatmap_from_df
 DTYPE = "float32"
 HB_KINDS = ["pairs", "states"]  # matches ms_hbnets subcommands
 VALID_AA1_CODES = [val for val in set(res3_to_res1.values()) if len(val) == 1]
-VALID_COFACTOR_SEPS = " .,;!?"
+RES_COFACTORS_SEP = "|"
+VALID_COFACTOR_SEPS = " .,"
 
 
 def get_resnum(resid: str):
     """Get the res num from the resid in hb_pairs_res_pH*.csv  or hb_states_pairs_pH*.csv files.
     Examples:
-      HOH_W123 -> 123; _CL_1 -> 1; K__90 -> 90
+      Aw1016 -> 1016; A_CL1 -> 1; _K90 -> 90; ADBK52 -> 52
     """
-    if "__" in resid: # no chain
-        return int(resid.rsplit("_")[-1])
-
-    return int(resid.rsplit("_")[-1][1:])
+    match = search(r"\d+$", resid)
+    if match:
+        return int(match.group())
+    else:
+        logging.warning(f"Seq number of {resid = } not found: assigned 0.")
+        return 0
 
 
 def get_file_header(file_fp: Union[str, Path]) -> str:
@@ -72,18 +76,18 @@ def get_res_of_interest(res_of_interest: str) -> Tuple[str]:
     """Loads user's res of interest from input string.
     Outputs a tuple so that it can be used with str.startswith.
     Examples: 
-      res_of_interest = "DEH+BK"        -> (D_, DBK_, E_, EBK_, H_, HBK_)
-      res_of_interest = "DEH+|HOH 4pti" -> (D_, DBK_, E_, EBK_, H_, HBK_, w_, 4PTI_)
-      res_of_interest = "DEH|HOH;abc"   -> (D_, E_, H_, w_, ABC_)
-      res_of_interest = "|HOH,abc"      -> (w_, ABC_)
+      res_of_interest = "DEH+BK"       -> (D, DBK, E, EBK, H, HBK)
+      res_of_interest = "DEH+|HOH PL9" -> (D, DBK, E, EBK, H, HBK, w, PL9)
+      res_of_interest = "DEH|HOH.pl9"  -> (D, E, H, w, PL9)
+      res_of_interest = "|HOH,PL9"     -> (w, PL9)
+      res_of_interest = "|HOH,PO4"     -> (w, PO4)
     """
     if not res_of_interest:
         return ()
 
-    # valid_seps = rf"[{VALID_COFACTOR_SEPS}]+"
     out = []
     roi = res_of_interest.upper()
-    add_hets = "|" in roi
+    add_hets = RES_COFACTORS_SEP in roi
     add_bk = "+" in roi
     if add_bk:
         ix = roi.index("+")
@@ -91,7 +95,7 @@ def get_res_of_interest(res_of_interest: str) -> Tuple[str]:
         ix = len(roi)
 
     if add_hets:
-        roi, het = roi.split("|")
+        roi, het = roi.split(RES_COFACTORS_SEP)
         if "HOH" in het:
             het = het.replace("HOH", "w")
 
@@ -101,18 +105,19 @@ def get_res_of_interest(res_of_interest: str) -> Tuple[str]:
         print(f"Found invalid 1-letter residue code(s) in {roi[:ix]!r}. Not filtering.")
     else:
         # ok to populate list
-        out.extend([f"{r}_" for r in roi[:ix]])
+        out.extend([f"{r}" for r in roi[:ix]])
         if add_bk:
-            out.extend([f"{r}BK_" for r in roi[:ix]])
+            out.extend([f"{r}BK" for r in roi[:ix]])
         if add_hets:
-            out.extend([f"{h}_" for h in re_split(rf"[{VALID_COFACTOR_SEPS}]+", het)])
+            out.extend([f"{h}" for h in re_split(rf"[{VALID_COFACTOR_SEPS}]+", het)])
 
     return tuple(out)
 
 
 def get_pairs_of_interest_df(pairs_of_interest_fp: Union[str, Path]) -> pd.DataFrame:
     """Loads user's pairs of interest from input file.
-    Assumed format example per line: R_A112,N_A106
+    Assumed format example per line: AR112,AN106
+    Previous format was: R_A112,N_A106
     """
     poi_fp = Path(pairs_of_interest_fp)
     if not poi_fp.exists():
@@ -127,7 +132,7 @@ def get_pairs_of_interest_df(pairs_of_interest_fp: Union[str, Path]) -> pd.DataF
     return poi_df
 
 
-def maybe_convert(df: pd.DataFrame) -> bool:
+def maybe_convert_split_BK(df: pd.DataFrame) -> bool:
     """Input dataframe df is loaded with either hb_pairs_res_*.csv or
     hb_states_pairs_*.csv data.
     If resids of a pair with flag 'with_bk'=True do no contain 'BK_',
@@ -136,8 +141,20 @@ def maybe_convert(df: pd.DataFrame) -> bool:
     """
     mskp = df["res_d"].str.contains("BK_") | df["res_a"].str.contains("BK_")
     msk = df["with_bk"].eq(True) & ~mskp
-
+ 
     return bool(msk.any())
+
+
+def maybe_convert_condensed_ids(df: pd.DataFrame) -> bool:
+    """Input dataframe df is loaded with either hb_pairs_res_*.csv or
+    hb_states_pairs_*.csv data.
+    New format: chain letter first, no underscore.
+    """
+    # check previous format: ids with BK but with underscore
+    # and chain before num, DBK_A52, D_A50;
+    mskp = df["res_d"].str.contains("_") | df["res_a"].str.contains("_")
+
+    return bool(mskp.any())
 
 
 class HbCorrelator:
@@ -160,8 +177,8 @@ class HbCorrelator:
            is calculated in addition to the pairs correlation.
          - split_BK (bool, False): If True, or no pairs of interest provided (no filtering), 
            separate correlation of the res-res and res-bk pairs will be computed.
-         - figs_args([dict, argparse.Namespace]): To control the heatmap sizes and the lowest
-           bound of the cbar and color of the data heatmaps.
+         - figs_args([dict, argparse.Namespace]): To control the heatmap sizes, the lowest
+           bound of the cbar and color of the data heatmaps, and pairs labels.
         """
         logging.info("HbCorrelator start...")
         self.ok = True
@@ -281,14 +298,14 @@ class HbCorrelator:
                                          columns=["count", "occ"]).reset_index()
             df[["res_d","res_a"]] = df["index"].apply(lambda x: pd.Series([x[0], x[1]]))
         else:
-            # else, hb pairs file update:
+            # hb pairs file update:
             df[["res_d","res_a"]] = df.apply(
                 lambda x: pd.Series([get_resid(x["donor"]), get_resid(x["acceptor"])]),
                 axis=1)
 
-        # common processing, up to saving:
+        # common processing, up to saving, res format: ADBK52
         df["with_bk"] = df.apply(
-            lambda row: row["res_d"][1:3]=="BK" or row["res_a"][1:3]=="BK", axis=1)
+            lambda row: row["res_d"][2:4]=="BK" or row["res_a"][2:4]=="BK", axis=1)
         df_res = group_confids_into_resids(df)
 
         if self.hb_kind == "states":
@@ -312,30 +329,39 @@ class HbCorrelator:
             self.ok = False
             return
 
+        redo = False
         df = pd.read_csv(csv_fp, comment="#")
-        # determine whether to update the format:
-        redo = maybe_convert(df)  # check resid format
+
+        # older format:
         if "res_d" in df.columns:
             msk_hoh = (df["res_d"].str.startswith("HOH") | df["res_a"].str.startswith("HOH"))
             redo = redo or msk_hoh.any()
         else:
             redo = True
-        redo = (redo
-                or "Mi" in df.columns 
-                or "index" in df.columns
-        )
+        redo = (redo or "Mi" in df.columns  or "index" in df.columns)
         if redo:
             df = self._redo_grouping_into_resid()  # & save updated file
+            return df
 
+        redo = maybe_convert_split_BK(df)
+        if redo:
+            df = self._redo_grouping_into_resid()  # & save updated file
+            return df
+        
+        # previous format has underscore
+        redo = maybe_convert_condensed_ids(df)
+        if redo:
+            df = self._redo_grouping_into_resid()  # & save updated file
         return df
 
     def _filter_res_of_interest(self, resdf: pd.DataFrame) -> pd.DataFrame:
         if not self.ok:
             return
 
-        if self.res_oi is not None:
+        if self.res_oi:
             try:
-                msk = resdf["res_d"].str.startswith(self.res_oi) | resdf["res_a"].str.startswith(self.res_oi)
+                msk = (resdf["res_d"].str[1:].str.startswith(self.res_oi) | 
+                       resdf["res_a"].str[1:].str.startswith(self.res_oi))
                 if msk.any():
                     resdf = resdf.loc[msk]
                     logging.info(f"Residue-filtered pairs count: {resdf.shape[0]}")
@@ -677,7 +703,7 @@ class HbCorrelator:
             # dict to obtain the matrix index of each pair
             self.res2mat_ix = {pair: px for px, pair in enumerate(df_index.tolist())}
             # dict to rename the corr matrix rows & columns:
-            # transform tuple to str: ('H_A12', 'V_A34') -> 'H_A12|V_A34'
+            # transform tuple to str: ('AH12', 'AV34') -> 'AH12|AV34'
             self.mat_ix2res = {v: f"{k[0]}|{k[1]}" for k, v in self.res2mat_ix.items()}
             logging.info(f"States PAIRS matrices columns: {self.n_cols}")
   
@@ -902,7 +928,9 @@ class HbCorrelator:
     def save_corr_heatmap(self,
                           fig_size=DEFAULT_FIGSIZE,
                           fig_save_fp=None,
-                          title="H-bond Microstates Correlation"):
+                          title="H-bond Microstates Correlation",
+                          split_x: bool = False,
+                          split_y: bool = False):
         """
         Wrapper for .plotting.heatmap_from_df
         """
@@ -916,6 +944,8 @@ class HbCorrelator:
                         title=title,
                         map_kind="corr",
                         fig_size=fig_size,
+                        split_x=split_x,
+                        split_y=split_y,
                         )
         return
 
@@ -984,12 +1014,11 @@ class HbCorrelator:
                     else:
                         fig_title = "H-bond States Acceptors Correlation, res-res"
 
-        return {
-                # "corr_kind": self.corr_kind,
-                # "corr_wise": self.corr_wise,
-                 "fig_fp": fig_fp,
-                 "fig_title": fig_title,
-                 "fig_size": fig_size,
+        return {"fig_fp": fig_fp,
+                "fig_title": fig_title,
+                "fig_size": fig_size,
+                "split_x": self.figs_args.split_x,
+                "split_y": self.figs_args.split_y,
                 }
 
     def run_pipeline_pairs_corr(self, pairs_df: pd.DataFrame):
@@ -1021,7 +1050,10 @@ class HbCorrelator:
         runspecs = self.get_fig_specs()
         self.save_corr_heatmap(fig_size=runspecs["fig_size"],
                                fig_save_fp=runspecs["fig_fp"],
-                               title=runspecs["fig_title"])
+                               title=runspecs["fig_title"],
+                               split_x=runspecs["split_x"],
+                               split_y=runspecs["split_y"],
+                               )
         tmp_dir.cleanup()
 
         return
@@ -1092,8 +1124,7 @@ class HbCorrelator:
         if split_dfs is not None:  # => self.split_bk == True
             res_pairs_df, bk_pairs_df = split_dfs
 
-        # dat files are always re-created as they will depends on the list of 'pairs of interest'
-        # Name of ph-dependent mem maps:
+        # Name of ph-dependent memory maps:
         # The caller using this dict will construct the path using a new tempdir
         self.mmap_fps = {"ms_matrices": f"hb_matrices_{self.pheh_str}.dat",
                          "ms_matrices_rows": f"hb_matrices_row_centered_{self.pheh_str}.dat",
