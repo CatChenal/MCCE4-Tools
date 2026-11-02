@@ -239,8 +239,10 @@ class HbCorrelator:
         self.include_states_da_corr = include_states_da_corr
         self.mmap_fps: dict = None
         self.dat_fps: dict = None
+
         self.pairs_df = None  # main df, ready for splitting if needed
-        # filtered with pairs_of_interest_fp is given & min_occ:  
+        # filtered with res_of_interest or pairs_of_interest_fp is given & min_occ:
+        self.filtered = False
         self.pairs_df = self.get_inputfile_pairs_data()
         if not self.ok:
             return
@@ -409,14 +411,13 @@ class HbCorrelator:
             return
         logging.info("Getting pairs data...")
 
-        save_filtered = False
         resdf = self._load_csv(self.input_fp2)
         # maybe filter:
         if self.res_oi is not None:
             df = self._filter_res_of_interest(resdf)
             if df is not None:
                 resdf = df
-                save_filtered = True
+                self.filtered = True
             else:
                 self.ok = False
                 return
@@ -425,7 +426,7 @@ class HbCorrelator:
             df = self._filter_pairs_of_interest(resdf)
             if df is not None:
                 resdf = df
-                save_filtered = True
+                self.filtered = True
             else:
                 self.ok = False
                 return
@@ -447,7 +448,7 @@ class HbCorrelator:
         resdf = resdf.drop(columns=["di","ai"])
         resdf = resdf.rename(columns={"res_d":"Donor", "res_a":"Acceptor"})
 
-        if save_filtered:
+        if self.filtered:
             resdf.to_csv(self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered.csv"),
                          index=False)
         return resdf
@@ -465,11 +466,14 @@ class HbCorrelator:
         # these dfs maybe loaded if split was done:
         res_respairs_df = None
         bk_respairs_df = None
-        if not self.split_bk:  # => self.pairs_df is filtered
+        if not self.split_bk:
             matrix_df = self.pairs_df.pivot(index="Donor", columns="Acceptor", values="occ").fillna(0)
             # data heatmap:
             title = f"H-bond Donor - Acceptor pairs data\n{self.input_fp2.name}"
-            png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered.png")
+            if self.filtered:
+                png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered.png")
+            else:
+                png_fp = self.input_fp2.with_suffix(".png")
             heatmap_from_df(matrix_df,
                             fig_save_fp=png_fp,
                             title=title,
@@ -537,7 +541,7 @@ class HbCorrelator:
         if split_dfs is not None:
             res_respairs_df, bk_respairs_df = split_dfs
 
-        if not self.split_bk:  # self.pairs_df is filtered, or split_BK was false
+        if not self.split_bk:
             # data heatmap:
             matrix_df = self.pairs_df.pivot(index="Donor", columns="Acceptor", values="occ").fillna(0)
 
@@ -548,7 +552,10 @@ class HbCorrelator:
                 logging.info("Not enough rows for correlation.")
             else:
                 title = "H-bond Donors correlation"
-                png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
+                if self.filtered:
+                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
+                else:
+                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors.png")
                 heatmap_from_df(row_corr_mat,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -564,7 +571,10 @@ class HbCorrelator:
                 logging.info("Not enough columns for correlation.")
             else:
                 title = "H-bond Acceptors correlation"
-                png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
+                if self.filtered:
+                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
+                else:
+                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors.png")
                 heatmap_from_df(col_corr_mat,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -588,7 +598,10 @@ class HbCorrelator:
                     logging.info("Not enough rows for correlation.")
                 else:
                     title = "H-bond Donors correlation, res-res"
-                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_res.png")
+                    if self.filtered:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors_res.png")
+                    else:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_res.png")
                     heatmap_from_df(row_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -603,7 +616,10 @@ class HbCorrelator:
                     logging.info("Not enough columns for correlation.")
                 else:
                     title = "H-bond Acceptors correlation, res-res"
-                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_res.png")
+                    if self.filtered:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors_res.png")
+                    else:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_res.png")
                     heatmap_from_df(col_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -630,7 +646,10 @@ class HbCorrelator:
                     logging.info("Not enough rows for correlation.")
                 else:
                     title = "H-bond Donors correlation, res-bk"
-                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_bk.png")
+                    if self.filtered:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors_bk.png")
+                    else:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_bk.png")
                     heatmap_from_df(row_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -645,7 +664,10 @@ class HbCorrelator:
                     logging.info("Not enough cols for correlation.")
                 else:
                     title = "H-bond Acceptors correlation, res-bk"
-                    png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_bk.png")
+                    if self.filtered:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors_bk.png")
+                    else:
+                        png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_bk.png")
                     heatmap_from_df(col_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -972,12 +994,20 @@ class HbCorrelator:
             hdr = self.get_hdr_info()
             fig_size = self.figs_args.figsize_corr
             if not self.split_bk:
-                fig_fp = self.input_fp1.with_name(f"{self.input_fp1.stem}_corr.png")
+                if self.filtered:
+                    fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr.png")
+                else:
+                    fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr.png")
                 fig_title = f"H-bond States Pairs Correlation\n{hdr}"
             else:
-                fig_fp = self.input_fp1.with_name(
-                    f"{self.input_fp1.stem}_corr_{self.split_kind}.png"
-                    )
+                if self.filtered:
+                    fig_fp = self.input_fp2.with_name(
+                                        f"{self.input_fp2.stem}_filtered_corr_{self.split_kind}.png"
+                                        )
+                else:
+                    fig_fp = self.input_fp2.with_name(
+                                        f"{self.input_fp2.stem}_corr_{self.split_kind}.png"
+                                        )
                 if self.split_kind == "bk":
                     fig_size = self.figs_args.figsize_corr_bk
                     fig_title = f"H-bond States Pairs Correlation, res-bk\n{hdr}"
