@@ -389,7 +389,7 @@ class HbCorrelator:
                     logging.info(f"Filtered pairs count: {resdf.shape[0]}")
                     return resdf
                 else:
-                    logging.warrning(f"Found no matches for the given pairs of interest: {self.poi_df!s}")
+                    logging.warning(f"Found no matches for the given pairs of interest: {self.poi_df!s}")
                     self.ok = False
                     return None
             except Exception as e:
