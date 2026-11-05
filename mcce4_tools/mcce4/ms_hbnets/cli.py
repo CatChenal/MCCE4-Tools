@@ -87,6 +87,7 @@ def process_pairs(args: Union[dict, Namespace]):
     HbCorr = HbCorrelator(mshb,
                           hb_kind="pairs",
                           res_of_interest=args.res_of_interest,
+                          grotthus=args.grotthus,
                           pairs_of_interest_fp=args.pairs_of_interest_csv,
                           min_occ=float(args.min_occ),
                           split_BK=args.split_BK,
@@ -132,6 +133,7 @@ def process_states(args: Union[dict, Namespace]):
     HbCorr = HbCorrelator(mshb,
                           hb_kind="states",
                           res_of_interest=args.res_of_interest,
+                          grotthus=args.grotthus,
                           pairs_of_interest_fp=args.pairs_of_interest_csv,
                           min_occ=float(args.min_occ),
                           include_states_da_corr=args.do_states_da_corr,
@@ -200,13 +202,23 @@ roi_help = f"""String of case-insensitive one-letter residue codes (minimal case
 Takes precedence over -pairs-of-interest-csv if given. String must be quoted when listing cofactors.
 Extended string: AA+ or "AA|XYZ<sep>abc" where <sep> is one of these characters: {VALID_COFACTOR_SEPS!r}
 Examples:
- -res-of-interest EHK             # no res bk, no cofactors
- -res-of-interest EHK+            # keep res bk, no cofactors
- -res-of-interest "EHK+|HOH PL9"  # keep res bk, water and PL9 cofactor
- -res-of-interest "EHK|HOH.pl9"   # no res bk, water and PL9 cofactor
+ -res-of-interest EHK             # no res-bk pairs, no cofactors
+ -res-of-interest EHK+            # keep res-bk pairs, no cofactors
+ -res-of-interest "EHK+|HOH PL9"  # keep res-bk pairs, water and PL9 cofactor
+ -res-of-interest "EHK|HOH.pl9"   # no res-bk pairs, water and PL9 cofactor
  -res-of-interest "|HOH,PL9"      # no res, water and PL9 cofactor
 Note:
   When filtering with residues, it is very likely that -figsize-data must be reduced, ex: -figsize-data 5,5
+"""
+
+grot_help = """To filter hb pairs with Grotthus-competenet residues in short list (DESTCYHK); Default: False
+Examples:
+ * Request for the short list with additional cofactor(s):
+   ms_hbnets pairs -res-of-interest "|xyz" --grotthus   # same as: -res-of-interest "DESTCYHK|HOH,xyz"
+ * Request for the short list of Grotthus-competent residues plus N:
+   ms_hbnets states -res-of-interest N --grotthus       # same as: -res-of-interest "DESTCYHKN|HOH"
+ * Request for the long list of Grotthus-competent residues:
+   ms_hbnets states -res-of-interest NQR --grotthus     # same as: -res-of-interest "DESTCYHKNQR|HOH"
 """
 
 def cli_parser():
@@ -262,6 +274,11 @@ Format example:
                     type=str,
                     default="Reds",
                     help=f"Color of the data heatmaps, one of: {AVAIL_COLORS}; Default: %(default)s"
+                    )
+    cp.add_argument("--grotthus",
+                    action="store_true",
+                    default=False,
+                    help=grot_help
                     )
     cp.add_argument("--run-checks",
                     action="store_true",

@@ -13,6 +13,7 @@ from collections import defaultdict
 import logging
 from multiprocessing import Pool
 from pathlib import Path
+from pprint import pformat
 from re import split as re_split, findall, search
 from tempfile import TemporaryDirectory
 from time import time
@@ -36,6 +37,32 @@ HB_KINDS = ["pairs", "states"]  # matches ms_hbnets subcommands
 VALID_AA1_CODES = [val for val in set(res3_to_res1.values()) if len(val) == 1]
 RES_COFACTORS_SEP = "|"
 VALID_COFACTOR_SEPS = " .,"
+GROTTHUS_RES = "DESTCYHK"   # short list
+GROTTHUS_RES3 = "NQR"       # long list
+
+
+def get_file_header(file_fp: Union[str, Path]) -> str:
+    """Return the first line of a file.
+       In this context: a commented, informative line.
+    """
+    with open(file_fp) as fh:
+        hdr = fh.readline().strip()
+    if hdr.startswith("#"):
+        return hdr
+    else:
+        return ""
+
+
+def format_num(num):
+    """Return condensed format for plots, up to millions.
+    """
+    M = 1_000_000
+    K = 1_000
+    if num > M:
+        return f"{num/M:.4g}M"
+    elif num > K:
+        return f"{num/K:.4g}K"
+    return num
 
 
 def get_resnum(resid: str):
@@ -51,28 +78,7 @@ def get_resnum(resid: str):
         return 0
 
 
-def get_file_header(file_fp: Union[str, Path]) -> str:
-    """Return the first line of a file.
-       In this context: a commented, informative line.
-    """
-    with open(file_fp) as fh:
-        hdr = fh.readline().strip()
-    return hdr
-
-
-def format_num(num):
-    """Return condensed format for plots, up to millions.
-    """
-    M = 1_000_000
-    K = 1_000
-    if num > M:
-        return f"{num/M:.4g}M"
-    elif num > K:
-        return f"{num/K:.4g}K"
-    return num
-
-
-def get_res_of_interest(res_of_interest: str) -> Tuple[str]:
+def get_res_of_interest(res_of_interest: str, grotthus: bool = False) -> Tuple[str]:
     """Loads user's res of interest from input string.
     Outputs a tuple so that it can be used with str.startswith.
     Examples: 
@@ -81,34 +87,65 @@ def get_res_of_interest(res_of_interest: str) -> Tuple[str]:
       res_of_interest = "DEH|HOH.pl9"  -> (D, E, H, w, PL9)
       res_of_interest = "|HOH,PL9"     -> (w, PL9)
       res_of_interest = "|HOH,PO4"     -> (w, PO4)
+
+    Residues and cofactors if grotthus is True:
+    Short list: DESTCYHK|HOH
+    Short list + any of the 3 add'l res in long list (NQR): DESTCYHKNQR|HOH
+    + add'l non-water cofactors
     """
-    if not res_of_interest:
+    if not res_of_interest and not grotthus:
         return ()
 
     out = []
+    if not res_of_interest and grotthus:
+        out.extend([f"{r}" for r in GROTTHUS_RES])
+        out.append("w")
+        return tuple(out)
+
     roi = res_of_interest.upper()
-    add_hets = RES_COFACTORS_SEP in roi
     add_bk = "+" in roi
+    if add_bk and grotthus:
+        roi = roi.replace("+","")
+        add_bk = False
+
     if add_bk:
         ix = roi.index("+")
     else:
         ix = len(roi)
 
+    add_hets = RES_COFACTORS_SEP in roi
     if add_hets:
         roi, het = roi.split(RES_COFACTORS_SEP)
         if "HOH" in het:
-            het = het.replace("HOH", "w")
+            if not grotthus:
+                het = het.replace("HOH", "w")
+            else:
+                het = het.replace("HOH","")
 
-    # validate 1-letter codes:
-    all_valid = all([res in VALID_AA1_CODES for res in roi[:ix]])
-    if not all_valid:
-        print(f"Found invalid 1-letter residue code(s) in {roi[:ix]!r}. Not filtering.")
+    if not grotthus:
+        # validate 1-letter codes:
+        all_valid = all([res in VALID_AA1_CODES for res in roi[:ix]])
+        if not all_valid:
+            logging.error(f"Found invalid 1-letter residue code(s) in {roi[:ix]!r}. Not filtering.")
+            return None
+        else:
+            # ok to populate list
+            out.extend([f"{r}" for r in roi[:ix]])
+            if add_bk:
+                out.extend([f"{r}BK" for r in roi[:ix]])
+            if add_hets:
+                out.extend([f"{h}" for h in re_split(rf"[{VALID_COFACTOR_SEPS}]+", het)])
     else:
-        # ok to populate list
-        out.extend([f"{r}" for r in roi[:ix]])
-        if add_bk:
-            out.extend([f"{r}BK" for r in roi[:ix]])
-        if add_hets:
+        out.extend([f"{r}" for r in GROTTHUS_RES])
+        if roi[:ix]:
+            all_valid = [res for res in roi[:ix] if res in GROTTHUS_RES3]
+            if not all_valid:
+                logging.warning(f"Ignoring additonal residue(s) in -res-of-interest (not N, Q or R).")
+            else:
+                # ok to populate user list
+                out.extend([f"{r}" for r in all_valid])
+        out.append("w")
+        if add_hets and het:
             out.extend([f"{h}" for h in re_split(rf"[{VALID_COFACTOR_SEPS}]+", het)])
 
     return tuple(out)
@@ -132,26 +169,12 @@ def get_pairs_of_interest_df(pairs_of_interest_fp: Union[str, Path]) -> pd.DataF
     return poi_df
 
 
-def maybe_convert_split_BK(df: pd.DataFrame) -> bool:
-    """Input dataframe df is loaded with either hb_pairs_res_*.csv or
-    hb_states_pairs_*.csv data.
-    If resids of a pair with flag 'with_bk'=True do no contain 'BK_',
-    returns True to indicate that the confid to resid naming & grouping
-    is to be redone to obtain the updated format.
-    """
-    mskp = df["res_d"].str.contains("BK_") | df["res_a"].str.contains("BK_")
-    msk = df["with_bk"].eq(True) & ~mskp
- 
-    return bool(msk.any())
-
-
 def maybe_convert_condensed_ids(df: pd.DataFrame) -> bool:
     """Input dataframe df is loaded with either hb_pairs_res_*.csv or
     hb_states_pairs_*.csv data.
     New format: chain letter first, no underscore.
     """
-    # check previous format: ids with BK but with underscore
-    # and chain before num, DBK_A52, D_A50;
+    # check previous format: with underscore
     mskp = df["res_d"].str.contains("_") | df["res_a"].str.contains("_")
 
     return bool(mskp.any())
@@ -161,6 +184,7 @@ class HbCorrelator:
     def __init__(self, hbms: MSout_hb,
                  hb_kind: str = None,
                  res_of_interest: str = None,
+                 grotthus: bool = False,
                  pairs_of_interest_fp: Union[str, Path] = None,
                  min_occ: float = MIN_OCC,
                  include_states_da_corr: bool = False,
@@ -172,6 +196,7 @@ class HbCorrelator:
          - hb_kind (str, None): One of HB_KINDS=["pairs", "states"]; if None -> "pairs"
          - pairs_of_interest_fp ([str, Path], None): Obtain the correlation of a pair of 
             hb residues (comma-separated residue hb pairs).
+         - grotthus (bool, False): Filter for Grotthus-competent residues
          - min_occ (float, MIN_OCC): To change the default used by the msout data loader
          - include_states_da_corr (bool, False): If True, the states Donors and Acceptors correlation
            is calculated in addition to the pairs correlation.
@@ -192,7 +217,6 @@ class HbCorrelator:
         if not self.ok:
             return
         self.input_fp1, self.input_fp2 = inputs
-        self.file_hdr: str = ""
         self.file_hdr = get_file_header(self.input_fp1)
 
         self.mcce_dir = hbms.run_dir
@@ -202,14 +226,12 @@ class HbCorrelator:
         self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
         logging.info(f"Heatmaps min_occ: {self.min_occ_print}")
 
-        self.split_bk = True  # always split unless filtered ot split_BK is True
+        self.grotthus = grotthus
         self.res_oi: tuple = None
-        if res_of_interest is not None:
-            self.res_oi = get_res_of_interest(res_of_interest)
-            if not self.res_oi:
-                self.ok = False
-                return
-            self.split_bk = False or split_BK
+        self.res_oi = get_res_of_interest(res_of_interest, self.grotthus)
+        if self.res_oi is None:
+            self.ok = False
+            return
 
         self.poi_df: pd.DataFrame = None
         if pairs_of_interest_fp is not None:
@@ -217,11 +239,7 @@ class HbCorrelator:
             if self.poi_df is None:
                 self.ok = False
                 return
-            self.split_bk = self.split_bk or split_BK
 
-        if self.split_bk:
-            logging.info("The hb pairs will be divided into res-res and res-BK pairs to reduce the heatmap size.")
-  
         # Populated by get_pairs_data :
         self.n_rows: int = 0
         self.n_cols: int = 0
@@ -241,12 +259,23 @@ class HbCorrelator:
         self.dat_fps: dict = None
 
         self.pairs_df = None  # main df, ready for splitting if needed
-        # filtered with res_of_interest or pairs_of_interest_fp is given & min_occ:
         self.filtered = False
+        # filtered with res_of_interest or pairs_of_interest_fp is given & min_occ:
         self.pairs_df = self.get_inputfile_pairs_data()
         if not self.ok:
             return
 
+        self.split_bk = True
+        if self.grotthus:
+            self.split_bk = False
+        else:
+            if self.filtered:
+                self.split_bk = split_BK
+
+        if self.split_bk:
+            logging.info("The hb pairs will be divided into res-res and res-BK pairs to reduce the heatmap size.")
+  
+        self.figure_captions = dict()
         if isinstance(figs_args, dict):
             self.figs_args = Namespace(**figs_args)
         else:
@@ -334,26 +363,22 @@ class HbCorrelator:
         redo = False
         df = pd.read_csv(csv_fp, comment="#")
 
+        # previous format has underscore
+        if maybe_convert_condensed_ids(df):
+            df = self._redo_grouping_into_resid()  # & save updated file
+            return df
+
         # older format:
         if "res_d" in df.columns:
             msk_hoh = (df["res_d"].str.startswith("HOH") | df["res_a"].str.startswith("HOH"))
-            redo = redo or msk_hoh.any()
+            redo = msk_hoh.any()
         else:
             redo = True
-        redo = (redo or "Mi" in df.columns  or "index" in df.columns)
+        redo = redo or ("Mi" in df.columns) or ("index" in df.columns)
         if redo:
             df = self._redo_grouping_into_resid()  # & save updated file
             return df
 
-        redo = maybe_convert_split_BK(df)
-        if redo:
-            df = self._redo_grouping_into_resid()  # & save updated file
-            return df
-        
-        # previous format has underscore
-        redo = maybe_convert_condensed_ids(df)
-        if redo:
-            df = self._redo_grouping_into_resid()  # & save updated file
         return df
 
     def _filter_res_of_interest(self, resdf: pd.DataFrame) -> pd.DataFrame:
@@ -362,16 +387,26 @@ class HbCorrelator:
 
         if self.res_oi:
             try:
-                msk = (resdf["res_d"].str[1:].str.startswith(self.res_oi) | 
-                       resdf["res_a"].str[1:].str.startswith(self.res_oi))
+                if self.grotthus:
+                    # no res-bk
+                    msk_d = (~resdf["res_d"].str.contains("BK") &
+                             resdf["res_d"].str[1:].str.startswith(self.res_oi)) 
+                    msk_a = (~resdf["res_a"].str.contains("BK") &
+                             resdf["res_a"].str[1:].str.startswith(self.res_oi))
+                    msk = msk_d & msk_a
+                else:
+                    msk = (resdf["res_d"].str[1:].str.startswith(self.res_oi) | 
+                           resdf["res_a"].str[1:].str.startswith(self.res_oi))
                 if msk.any():
                     resdf = resdf.loc[msk]
                     logging.info(f"Residue-filtered pairs count: {resdf.shape[0]}")
                     return resdf
+                else:
+                    return None
             except Exception as e:
                 logging.error(f"Could not filter the dataframe for residues of interest. Error:\n{e}")
                 self.ok = False
-                return
+                return None
         else:
             return resdf
 
@@ -405,7 +440,7 @@ class HbCorrelator:
         The pairs from the pairs_res file are the most occupied overall.
         These pairs define the size of the residue-based stored matrices.
 
-        Prep of the main df: filtered for poi & occ.
+        Prep of the main df: filtered for res oi, paits oi & occ.
         """
         if not self.ok:
             return
@@ -413,11 +448,15 @@ class HbCorrelator:
 
         resdf = self._load_csv(self.input_fp2)
         # maybe filter:
-        if self.res_oi is not None:
+        if self.res_oi:
             df = self._filter_res_of_interest(resdf)
             if df is not None:
                 resdf = df
                 self.filtered = True
+                if self.grotthus:
+                    logging.info(f"Data filtered for Grotthus res of interest: {self.res_oi}")
+                else:
+                    logging.info(f"Data filtered for res of interest: {self.res_oi}")
             else:
                 self.ok = False
                 return
@@ -427,6 +466,7 @@ class HbCorrelator:
             if df is not None:
                 resdf = df
                 self.filtered = True
+                logging.info("Data filtered for pairs of interest")
             else:
                 self.ok = False
                 return
@@ -469,11 +509,16 @@ class HbCorrelator:
         if not self.split_bk:
             matrix_df = self.pairs_df.pivot(index="Donor", columns="Acceptor", values="occ").fillna(0)
             # data heatmap:
-            title = f"H-bond Donor - Acceptor pairs data\n{self.input_fp2.name}"
             if self.filtered:
+                if self.grotthus:
+                    title = f"H-bond Donor - Acceptor pairs data (Grotthus filtered)\n{self.input_fp2.name}"
+                else:
+                    title = f"H-bond Donor - Acceptor pairs data (filtered)\n{self.input_fp2.name}"
                 png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered.png")
             else:
+                title = f"H-bond Donor - Acceptor pairs data\n{self.input_fp2.name}"
                 png_fp = self.input_fp2.with_suffix(".png")
+            self.figure_captions[str(png_fp)] = title
             heatmap_from_df(matrix_df,
                             fig_save_fp=png_fp,
                             title=title,
@@ -492,8 +537,12 @@ class HbCorrelator:
         
                 matrix_df = res_respairs_df.pivot(index="Donor", columns="Acceptor", values="occ").fillna(0)
                 # data heatmap:
-                title = f"H-bond Donor - Acceptor pairs data, res-res\n({self.input_fp2.name})"
+                if self.filtered:
+                    title = f"H-bond Donor - Acceptor pairs data, res-res (filtered)\n{self.input_fp2.name}"
+                else:
+                    title = f"H-bond Donor - Acceptor pairs data, res-res\n({self.input_fp2.name})"
                 png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_res.png")
+                self.figure_captions[str(png_fp)] = title
                 heatmap_from_df(matrix_df,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -513,8 +562,12 @@ class HbCorrelator:
 
                 matrix_df = bk_respairs_df.pivot(index="Donor", columns="Acceptor", values="occ").fillna(0)
                 # data heatmap:
-                title = f"H-bond Donor - Acceptor pairs data, res-bk\n({self.input_fp2.name})"
+                if self.filtered:
+                    title = f"H-bond Donor - Acceptor pairs data, res-bk (filtered)\n{self.input_fp2.name}"
+                else:
+                    title = f"H-bond Donor - Acceptor pairs data, res-bk\n({self.input_fp2.name})"
                 png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_bk.png")
+                self.figure_captions[str(png_fp)] = title
                 heatmap_from_df(matrix_df,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -551,11 +604,16 @@ class HbCorrelator:
             if row_corr_mat.shape[0] < 2:
                 logging.info("Not enough rows for correlation.")
             else:
-                title = "H-bond Donors correlation"
                 if self.filtered:
+                    if self.grotthus:
+                        title = "H-bond Donors correlation (Grotthus filtered)"
+                    else:
+                        title = "H-bond Donors correlation (filtered)"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
                 else:
+                    title = "H-bond Donors correlation"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors.png")
+                self.figure_captions[str(png_fp)] = title
                 heatmap_from_df(row_corr_mat,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -570,11 +628,16 @@ class HbCorrelator:
             if col_corr_mat.shape[0] < 2:
                 logging.info("Not enough columns for correlation.")
             else:
-                title = "H-bond Acceptors correlation"
                 if self.filtered:
+                    if self.grotthus:
+                        title = "H-bond Acceptors correlation (Grotthus filtered)"
+                    else:
+                        title = "H-bond Acceptors correlation (filtered)"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
                 else:
+                    title = "H-bond Acceptors correlation"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors.png")
+                self.figure_captions[str(png_fp)] = title
                 heatmap_from_df(col_corr_mat,
                                 fig_save_fp=png_fp,
                                 title=title,
@@ -597,11 +660,13 @@ class HbCorrelator:
                 if row_corr_mat.shape[0] < 2:
                     logging.info("Not enough rows for correlation.")
                 else:
-                    title = "H-bond Donors correlation, res-res"
                     if self.filtered:
+                        title = "H-bond Donors correlation, res-res (filtered)"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors_res.png")
                     else:
+                        title = "H-bond Donors correlation, res-res"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_res.png")
+                    self.figure_captions[str(png_fp)] = title
                     heatmap_from_df(row_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -615,11 +680,13 @@ class HbCorrelator:
                 if col_corr_mat.shape[0] < 2:
                     logging.info("Not enough columns for correlation.")
                 else:
-                    title = "H-bond Acceptors correlation, res-res"
                     if self.filtered:
+                        title = "H-bond Acceptors correlation, res-res (filtered)"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors_res.png")
                     else:
+                        title = "H-bond Acceptors correlation, res-res"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_res.png")
+                    self.figure_captions[str(png_fp)] = title
                     heatmap_from_df(col_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -645,11 +712,13 @@ class HbCorrelator:
                 if row_corr_mat.shape[0] < 2:
                     logging.info("Not enough rows for correlation.")
                 else:
-                    title = "H-bond Donors correlation, res-bk"
                     if self.filtered:
+                        title = "H-bond Donors correlation, res-bk (filtered)"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors_bk.png")
                     else:
+                        title = "H-bond Donors correlation, res-bk"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors_bk.png")
+                    self.figure_captions[str(png_fp)] = title
                     heatmap_from_df(row_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -663,11 +732,13 @@ class HbCorrelator:
                 if col_corr_mat.shape[0] < 2:
                     logging.info("Not enough cols for correlation.")
                 else:
-                    title = "H-bond Acceptors correlation, res-bk"
                     if self.filtered:
+                        title = "H-bond Acceptors correlation, res-bk (filtered)"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors_bk.png")
                     else:
+                        title = "H-bond Acceptors correlation, res-bk"
                         png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors_bk.png")
+                    self.figure_captions[str(png_fp)] = title
                     heatmap_from_df(col_corr_mat,
                                     fig_save_fp=png_fp,
                                     title=title,
@@ -679,6 +750,7 @@ class HbCorrelator:
             else:
                 logging.info("No hb pairs of residue-backbone kind.")
 
+        logging.info("Figure captions:\n" + pformat(self.figure_captions, sort_dicts=False, width=150) + "\n")
         logging.info("Processing of pairs correlation over.\n")
         logging.info(show_elapsed_time(process_start, info="H-bond pairs processing"))
 
@@ -983,7 +1055,7 @@ class HbCorrelator:
 
         return f"{self.n_matrices:,} occupied, {info}"
 
-    def  get_fig_specs(self) -> dict:
+    def get_fig_specs(self) -> dict:
         """
         Get the figure parameters according to user's options.
         """
@@ -995,10 +1067,15 @@ class HbCorrelator:
             fig_size = self.figs_args.figsize_corr
             if not self.split_bk:
                 if self.filtered:
+                    if self.grotthus:
+                        fig_title = f"H-bond States Pairs Correlation (Grotthus filtered)\n{hdr}"
+                    else:
+                        fig_title = f"H-bond States Pairs Correlation (filtered)\n{hdr}"
                     fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr.png")
                 else:
+                    fig_title = f"H-bond States Pairs Correlation\n{hdr}"
                     fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr.png")
-                fig_title = f"H-bond States Pairs Correlation\n{hdr}"
+                self.figure_captions[str(fig_fp)] = fig_title
             else:
                 if self.filtered:
                     fig_fp = self.input_fp2.with_name(
@@ -1010,39 +1087,84 @@ class HbCorrelator:
                                         )
                 if self.split_kind == "bk":
                     fig_size = self.figs_args.figsize_corr_bk
-                    fig_title = f"H-bond States Pairs Correlation, res-bk\n{hdr}"
+                    if self.filtered:
+                        fig_title = f"H-bond States Pairs Correlation, res-bk (filtered)\n{hdr}"
+                    else:
+                        fig_title = f"H-bond States Pairs Correlation, res-bk\n{hdr}"
                 else:
-                    fig_title = f"H-bond States Pairs Correlation, res-res\n{hdr}"
+                    if self.filtered:
+                        fig_title = f"H-bond States Pairs Correlation, res-res (filtered)\n{hdr}"
+                    else:
+                        fig_title = f"H-bond States Pairs Correlation, res-res\n{hdr}"
+                self.figure_captions[str(fig_fp)] = fig_title
         else:
             # da: Donors, Acceptors correl
             if self.corr_wise == "row":
                 fig_size = self.figs_args.figsize_donor_corr
                 if not self.split_kind:
-                    fig_fp = self.input_fp1.with_name(f"{self.input_fp1.stem}_corr_donors.png")
-                    fig_title = "H-bond States Donors Correlation"
+                    if self.filtered:
+                        if self.grotthus:
+                            fig_title = "H-bond States Donors Correlation (Grotthus filtered)"
+                        else:
+                            fig_title = "H-bond States Donors Correlation (filtered)"
+                        fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
+                    else:
+                        fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_donors.png")
+                        fig_title = "H-bond States Donors Correlation"
                 else:
-                    fig_fp = self.input_fp1.with_name(
-                        f"{self.input_fp1.stem}_corr_donors_{self.split_kind}.png"
-                        )
+                    if self.filtered:
+                        fig_fp = self.input_fp2.with_name(
+                                                    f"{self.input_fp2.stem}_filtered_corr_donors_{self.split_kind}.png"
+                                                    )
+                    else:
+                        fig_fp = self.input_fp2.with_name(
+                            f"{self.input_fp2.stem}_corr_donors_{self.split_kind}.png"
+                            )
                     if self.split_kind =="bk":
                         fig_size = self.figs_args.figsize_donor_corr_bk
-                        fig_title = "H-bond States Donors Correlation, res-bk"
+                        if self.filtered:
+                            fig_title = "H-bond States Donors Correlation, res-bk (filtered)"
+                        else:
+                            fig_title = "H-bond States Donors Correlation, res-bk"
                     else:
-                        fig_title = "H-bond States Donors Correlation, res-res"
+                        if self.filtered:
+                            fig_title = "H-bond States Donors Correlation, res-res (filtered)"
+                        else:
+                            fig_title = "H-bond States Donors Correlation, res-res"
+                self.figure_captions[str(fig_fp)] = fig_title
             else:
                 fig_size = self.figs_args.figsize_acceptor_corr       
                 if not self.split_kind:
-                    fig_fp = self.input_fp1.with_name(f"{self.input_fp1.stem}_corr_acceptors.png")
-                    fig_title = "H-bond States Acceptors Correlation"
+                    if self.filtered:
+                        fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
+                        if self.grotthus:
+                            fig_title = "H-bond States Acceptors Correlation (Grotthus filtered)"
+                        else:
+                            fig_title = "H-bond States Acceptors Correlation (filtered)"
+                    else:
+                        fig_title = "H-bond States Acceptors Correlation"
+                        fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_corr_acceptors.png")
                 else:
-                    fig_fp = self.input_fp1.with_name(
-                        f"{self.input_fp1.stem}_corr_acceptors_{self.split_kind}.png"
-                        )
+                    if self.filtered:
+                        fig_fp = self.input_fp2.with_name(
+                            f"{self.input_fp2.stem}_filtered_corr_acceptors_{self.split_kind}.png"
+                            )
+                    else:
+                        fig_fp = self.input_fp2.with_name(
+                            f"{self.input_fp2.stem}_corr_acceptors_{self.split_kind}.png"
+                            )
                     if self.split_kind =="bk":
                         fig_size = self.figs_args.figsize_acceptor_corr_bk
-                        fig_title = "H-bond States Acceptors Correlation, res-bk"
+                        if self.filtered:
+                            fig_title = "H-bond States Acceptors Correlation, res-bk (filtered)"
+                        else:
+                            fig_title = "H-bond States Acceptors Correlation, res-bk"
                     else:
-                        fig_title = "H-bond States Acceptors Correlation, res-res"
+                        if self.filtered:
+                            fig_title = "H-bond States Acceptors Correlation, res-res (filtered)"
+                        else:
+                            fig_title = "H-bond States Acceptors Correlation, res-res"
+                self.figure_captions[str(fig_fp)] = fig_title
 
         return {"fig_fp": fig_fp,
                 "fig_title": fig_title,
@@ -1200,6 +1322,7 @@ class HbCorrelator:
                     self.corr_kind = "da"
                     self.run_pipeline_da_corr(bk_pairs_df)
 
+        logging.info("Figure captions:\n" + pformat(self.figure_captions, sort_dicts=False, width=150) + "\n")
         logging.info("Processing of states correlation over.")
         logging.info(show_elapsed_time(process_start, info="H-bond states processing"))
 
