@@ -163,7 +163,10 @@ def plot_heatmap(df: pd.DataFrame,
                             aspect=30,   # Higher number makes the width thinner (default is 20)
     )
     cb.outline.set_linewidth(0)
-    cb.set_label('occ', rotation=270, labelpad=5, weight="bold")    
+    if map_kind == "data":
+        cb.set_label('Occupancy', rotation=270, labelpad=10)
+    else:
+        cb.set_label('Occupancy correlation', rotation=270, labelpad=10)    
     # also rasterize the colorbar to avoid white lines on the PDF rendering
     cb.solids.set_rasterized(True)
 
@@ -230,7 +233,6 @@ def heatmap_from_df(df: pd.DataFrame,
                     color: str = "Reds",   # data heatmap
                     split_x: bool = False,
                     split_y: bool = False,
-                    #ticklabels_fontsize: int = None,
                     ):
     """Wrapper function to plot_heatmap: Creates fig & ax prior to call;
     defines and sets title, decides if fig is to be saved.
