@@ -8,6 +8,7 @@ Codebase: mcce4/ms_hbnets/plotting.py
 import logging
 from pathlib import Path
 from re import search
+from typing import Any, List, Union
 
 import matplotlib as mpl
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -22,25 +23,15 @@ COLOR_GRADIENTS = ['Blues','Greens','Greys','Oranges','Purples','Reds']
 AVAIL_COLORS = ", ".join(c for c in COLOR_GRADIENTS)
 
 
-def _split_label_text(text: str) -> str:
-    """Split states pairs label at '|'
-    match = search(r"[ \-]", text)
-    if match:
-      idx = match.start()
-      return text[:idx] + "\n" + text[idx + 1 :]
-    """
-    return text.replace("|", "\n")
-
-
-def split_ids(ticklabels: list) -> list:
+def split_ids(ticklabels: List[str]) -> List[str]:
+    ol = []
     for label in ticklabels:
-        txt = label.get_text()
-        if "|" not in txt:
-            continue
-        label.set_text(_split_label_text(txt))
+        if "|" not in label:
+            ol.append(label)
+        else:
+            ol.append(label.replace("|", "\n"))
 
-    return ticklabels
-
+    return ol
 
 def despine(ax = None, which=['top','right']):
     """which ([str])): 'left','top','right','bottom'."""
@@ -115,12 +106,14 @@ def get_cmap_bnorm(map_kind: str = "data",
 
 
 def plot_heatmap(df: pd.DataFrame,
-                 ax=None, fig=None,
+                 ax=None,
+                 fig=None,
                  map_kind: str = "data",
                  min_bound: float = 0.0,
                  color: str = "Reds",   # data heatmap
                  split_x: bool = False,
                  split_y: bool = False,
+                 publication: bool = False,
                  ):
     """Draw the pcolormesh heatmap on the provided Axis.
     pcolormesh can handle unevenly spaced or skewed (non-rectilinear) grids.
@@ -142,31 +135,56 @@ def plot_heatmap(df: pd.DataFrame,
     # Center the ticks in the middle of each box
     x = np.arange(nC) + 0.5
     y = np.arange(nR) + 0.5
-    kws={'rasterized': True, 'norm': bnorm}
+    kws={"rasterized": True, "norm": bnorm}
     mesh = ax.pcolormesh(x, y, plot_data, cmap=cmap, **kws)
 
     # Set the axis limits
     ax.set(xlim=(0, nC), ylim=(0, nR))
     # Invert the y axis to show the plot in matrix form
     ax.invert_yaxis()
+
+    ax.tick_params(axis='both', direction='out', length=7, width=1.5)
+
+    if not publication:
+        font_size = 12
+    else:
+        font_size = 32
+    
     # use labels from df
-    ax.set_xticks(x, df.columns.tolist())
-    ax.set_yticks(y, df.index.tolist(), rotation="horizontal", va="center")
-    ax.tick_params(axis='both', direction='out', length=6) #, width=1.5)
+    xlabels = df.columns.tolist()
+    if split_x:
+        xlabels = split_ids(xlabels)
+    ax.set_xticks(x, labels=xlabels, fontsize=font_size)
+    if publication:
+        xtl = ax.get_xticklabels()
+        if axis_ticklabels_overlap(xtl):
+            plt.setp(xtl, rotation=40,
+                     ha="right", rotation_mode="anchor")
+ 
+    ylabels = df.index.tolist()
+    if split_y:
+        ylabels = split_ids(ylabels)
+    ax.set_yticks(y, labels=ylabels, fontsize=font_size,
+                  rotation="horizontal", va="center")
 
     cb = ax.figure.colorbar(mesh,
                             ax=ax, 
                             boundaries=bnorm, 
                             orientation='vertical',
                             pad=0.02,    # closer to plot
-                            shrink=0.65,  # Shrinks the height to 65% of the axis height
-                            aspect=30,   # Higher number makes the width thinner (default is 20)
+                            shrink=0.65, # Shrinks the height to 65% of the axis height
+                            aspect=35,   # Higher number makes the width thinner (default is 20)
     )
     cb.outline.set_linewidth(0)
+    cb.ax.tick_params(labelsize=font_size)
     if map_kind == "data":
-        cb.set_label('Occupancy', rotation=270, labelpad=10)
+        cb.set_label('Occupancy', rotation=270,
+                     labelpad=font_size * 0.8,
+                     fontsize=font_size)
     else:
-        cb.set_label('Occupancy correlation', rotation=270, labelpad=10)    
+        cb.set_label('Occupancy correlation', rotation=270,
+                     labelpad=font_size * 0.8,
+                     fontsize=font_size)
     # also rasterize the colorbar to avoid white lines on the PDF rendering
     cb.solids.set_rasterized(True)
 
@@ -177,13 +195,6 @@ def plot_heatmap(df: pd.DataFrame,
             fig.draw(fig.canvas.get_renderer())
         except AttributeError:
             pass
-
-    if split_x:
-        xtl = split_ids(ax.get_xticklabels())
-        ax.set_xticklabels(xtl)
-    if split_y:
-        ytl = split_ids(ax.get_yticklabels())
-        ax.set_yticklabels(ytl)
 
     if not (split_x or split_y):
         # Possibly rotate them if they overlap
@@ -196,6 +207,8 @@ def plot_heatmap(df: pd.DataFrame,
 
     # Add the axis labels
     ax.set(xlabel=df.columns.name, ylabel=df.index.name)
+    ax.xaxis.label.set_size(font_size)
+    ax.yaxis.label.set_size(font_size)
     ax.set_aspect("equal")
 
     return ax
@@ -233,12 +246,15 @@ def heatmap_from_df(df: pd.DataFrame,
                     color: str = "Reds",   # data heatmap
                     split_x: bool = False,
                     split_y: bool = False,
+                    publication: bool = False,
                     ):
     """Wrapper function to plot_heatmap: Creates fig & ax prior to call;
     defines and sets title, decides if fig is to be saved.
     """
     figsize = maybe_resize(fig_size, df.shape)
     fig, ax = plt.subplots(1,1, figsize=figsize, layout='constrained')
+    if not publication:
+        ax.set_title(title, fontdict={'weight':'bold', "size":12})
     
     plot_heatmap(df, ax=ax, fig=fig,
                  map_kind=map_kind,
@@ -246,12 +262,11 @@ def heatmap_from_df(df: pd.DataFrame,
                  color=color,
                  split_x=split_x,
                  split_y=split_y,
+                 publication=publication,
                  )
 
-    ax.set_title(title, fontdict={'weight':'bold', "size":10})
-
     if fig_save_fp is not None:
-        plt.savefig(fig_save_fp)
+        plt.savefig(fig_save_fp, dpi=400) #, bbox_inches="tight")
         logging.info(f"  Figure: {fig_save_fp!s}; Size: {figsize}")
 
     plt.draw()

@@ -196,7 +196,7 @@ class HbCorrelator:
          - hb_kind (str, None): One of HB_KINDS=["pairs", "states"]; if None -> "pairs"
          - pairs_of_interest_fp ([str, Path], None): Obtain the correlation of a pair of 
             hb residues (comma-separated residue hb pairs).
-         - grotthus (bool, False): Filter for Grotthus-competent residues
+         - grotthus (bool, False): Filter for Grotthuss-competent residues
          - min_occ (float, MIN_OCC): To change the default used by the msout data loader
          - include_states_da_corr (bool, False): If True, the states Donors and Acceptors correlation
            is calculated in addition to the pairs correlation.
@@ -454,7 +454,7 @@ class HbCorrelator:
                 resdf = df
                 self.filtered = True
                 if self.grotthus:
-                    logging.info(f"Data filtered for Grotthus res of interest: {self.res_oi}")
+                    logging.info(f"Data filtered for Grotthuss res of interest: {self.res_oi}")
                 else:
                     logging.info(f"Data filtered for res of interest: {self.res_oi}")
             else:
@@ -511,7 +511,7 @@ class HbCorrelator:
             # data heatmap:
             if self.filtered:
                 if self.grotthus:
-                    title = f"H-bond Donor - Acceptor pairs data (Grotthus filtered)\n{self.input_fp2.name}"
+                    title = f"H-bond Donor - Acceptor pairs data (Grotthuss filtered)\n{self.input_fp2.name}"
                 else:
                     title = f"H-bond Donor - Acceptor pairs data (filtered)\n{self.input_fp2.name}"
                 png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered.png")
@@ -525,6 +525,7 @@ class HbCorrelator:
                             fig_size=self.figs_args.figsize_data,
                             min_bound=self.figs_args.data_cbar_min,
                             color=self.figs_args.data_map_color,
+                            publication=self.figs_args.publication,
                             ) 
         else:
             # split non-BK, then BK:
@@ -549,6 +550,7 @@ class HbCorrelator:
                                 fig_size=self.figs_args.figsize_data,
                                 min_bound=self.figs_args.data_cbar_min,
                                 color=self.figs_args.data_map_color,
+                                publication=self.figs_args.publication,
                                 )
             else:
                 logging.info(f"{kind.upper()}: No hb pairs of res-res kind in {self.input_fp2.name}.")
@@ -574,6 +576,7 @@ class HbCorrelator:
                                 fig_size=self.figs_args.figsize_data_bk,
                                 min_bound=self.figs_args.data_cbar_min,
                                 color=self.figs_args.data_map_color,
+                                publication=self.figs_args.publication,
                                 )
             else:
                 logging.info(f"{kind.upper()}: No pairs of res-bk kind in {self.input_fp2.name}.")
@@ -606,7 +609,7 @@ class HbCorrelator:
             else:
                 if self.filtered:
                     if self.grotthus:
-                        title = "H-bond Donors correlation (Grotthus filtered)"
+                        title = "H-bond Donors correlation (Grotthuss filtered)"
                     else:
                         title = "H-bond Donors correlation (filtered)"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
@@ -621,6 +624,7 @@ class HbCorrelator:
                                 fig_size=self.figs_args.figsize_donor_corr,
                                 min_bound=self.figs_args.data_cbar_min,
                                 color=self.figs_args.data_map_color,
+                                publication=self.figs_args.publication,
                                 )
             
             # Compute Acceptor (col) correlation
@@ -630,7 +634,7 @@ class HbCorrelator:
             else:
                 if self.filtered:
                     if self.grotthus:
-                        title = "H-bond Acceptors correlation (Grotthus filtered)"
+                        title = "H-bond Acceptors correlation (Grotthuss filtered)"
                     else:
                         title = "H-bond Acceptors correlation (filtered)"
                     png_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
@@ -645,6 +649,7 @@ class HbCorrelator:
                                 fig_size=self.figs_args.figsize_acceptor_corr,
                                 min_bound=self.figs_args.data_cbar_min,
                                 color=self.figs_args.data_map_color,
+                                publication=self.figs_args.publication,
                                 )
         else:
             # split non-BK, then BK:
@@ -674,6 +679,7 @@ class HbCorrelator:
                                     fig_size=self.figs_args.figsize_donor_corr,
                                     min_bound=self.figs_args.data_cbar_min,
                                     color=self.figs_args.data_map_color,
+                                    publication=self.figs_args.publication,
                                     )
                 
                 col_corr_mat = matrix_df.corr()
@@ -694,6 +700,7 @@ class HbCorrelator:
                                     fig_size=self.figs_args.figsize_acceptor_corr,
                                     min_bound=self.figs_args.data_cbar_min,
                                     color=self.figs_args.data_map_color,
+                                    publication=self.figs_args.publication,
                                     )
             else:
                 logging.info("No hb pairs of residue-residue kind.")
@@ -726,6 +733,7 @@ class HbCorrelator:
                                     fig_size=self.figs_args.figsize_donor_corr_bk,
                                     min_bound=self.figs_args.data_cbar_min,
                                     color=self.figs_args.data_map_color,
+                                    publication=self.figs_args.publication,
                                     )
                 
                 col_corr_mat = matrix_df.corr()
@@ -746,6 +754,7 @@ class HbCorrelator:
                                     fig_size=self.figs_args.figsize_acceptor_corr_bk,
                                     min_bound=self.figs_args.data_cbar_min,
                                     color=self.figs_args.data_map_color,
+                                    publication=self.figs_args.publication,
                                     )
             else:
                 logging.info("No hb pairs of residue-backbone kind.")
@@ -1024,7 +1033,8 @@ class HbCorrelator:
                           fig_save_fp=None,
                           title="H-bond Microstates Correlation",
                           split_x: bool = False,
-                          split_y: bool = False):
+                          split_y: bool = False,
+                          publication: bool = False):
         """
         Wrapper for .plotting.heatmap_from_df
         """
@@ -1040,6 +1050,7 @@ class HbCorrelator:
                         fig_size=fig_size,
                         split_x=split_x,
                         split_y=split_y,
+                        publication=publication,
                         )
         return
 
@@ -1068,7 +1079,7 @@ class HbCorrelator:
             if not self.split_bk:
                 if self.filtered:
                     if self.grotthus:
-                        fig_title = f"H-bond States Pairs Correlation (Grotthus filtered)\n{hdr}"
+                        fig_title = f"H-bond States Pairs Correlation (Grotthuss filtered)\n{hdr}"
                     else:
                         fig_title = f"H-bond States Pairs Correlation (filtered)\n{hdr}"
                     fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr.png")
@@ -1104,7 +1115,7 @@ class HbCorrelator:
                 if not self.split_kind:
                     if self.filtered:
                         if self.grotthus:
-                            fig_title = "H-bond States Donors Correlation (Grotthus filtered)"
+                            fig_title = "H-bond States Donors Correlation (Grotthuss filtered)"
                         else:
                             fig_title = "H-bond States Donors Correlation (filtered)"
                         fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_donors.png")
@@ -1138,7 +1149,7 @@ class HbCorrelator:
                     if self.filtered:
                         fig_fp = self.input_fp2.with_name(f"{self.input_fp2.stem}_filtered_corr_acceptors.png")
                         if self.grotthus:
-                            fig_title = "H-bond States Acceptors Correlation (Grotthus filtered)"
+                            fig_title = "H-bond States Acceptors Correlation (Grotthuss filtered)"
                         else:
                             fig_title = "H-bond States Acceptors Correlation (filtered)"
                     else:
@@ -1171,6 +1182,7 @@ class HbCorrelator:
                 "fig_size": fig_size,
                 "split_x": self.figs_args.split_x,
                 "split_y": self.figs_args.split_y,
+                "publication": self.figs_args.publication,
                 }
 
     def run_pipeline_pairs_corr(self, pairs_df: pd.DataFrame):
@@ -1205,6 +1217,7 @@ class HbCorrelator:
                                title=runspecs["fig_title"],
                                split_x=runspecs["split_x"],
                                split_y=runspecs["split_y"],
+                               publication=runspecs["publication"],
                                )
         tmp_dir.cleanup()
 
@@ -1243,7 +1256,9 @@ class HbCorrelator:
         runspecs = self.get_fig_specs()
         self.save_corr_heatmap(fig_size=runspecs["fig_size"],
                                fig_save_fp=runspecs["fig_fp"],
-                               title=runspecs["fig_title"])
+                               title=runspecs["fig_title"],
+                               publication=runspecs["publication"],
+                               )
         # acceptors:
         self.corr_wise = "col"
         centered_specs = self.get_centered_specs()
@@ -1253,7 +1268,9 @@ class HbCorrelator:
         runspecs = self.get_fig_specs()
         self.save_corr_heatmap(fig_size=runspecs["fig_size"],
                                fig_save_fp=runspecs["fig_fp"],
-                               title=runspecs["fig_title"])
+                               title=runspecs["fig_title"],
+                               publication=runspecs["publication"],
+                               )
         tmp_dir.cleanup()
 
         return

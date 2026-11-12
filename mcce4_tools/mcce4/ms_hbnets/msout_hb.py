@@ -560,7 +560,7 @@ def _process_hbpairs_numba(microstate: np.ndarray,
     hb_pairs is the hb pairs dense matrix, MSout_hb.P;
     ms_mask is a boolean mask preset to True with the given state iconfs, i.e.:
     ```
-      ms_mask = np.zeros(self.n_hb_confs, dtype=np.uint8)
+      ms_mask = np.zeros(self.n_hb_confs, dtype=np.uint16)
       ms_mask[microstate] = 1
     ```
     """
@@ -1043,7 +1043,7 @@ class MSout_hb:
         n_rows = df.shape[0]
         logging.info(f"Unique H-bonding pairs for matrix: {n_rows}")
         return csr_matrix(([1]*n_rows, (df["Mi"].values, df["Mj"].values)),
-                           dtype=np.uint8,
+                           dtype=np.uint16,
                            shape=(self.n_hb_confs, self.n_hb_confs)
                            )
 
@@ -1070,21 +1070,21 @@ class MSout_hb:
         The values for row i are in data[indptr[i]:indptr[i+1]] and the corresponding
         column indices are in indices[indptr[i]:indptr[i+1]].
         """
-        indptr = np.zeros(self.n_hb_confs + 1, dtype=np.int32)
+        indptr = np.zeros(self.n_hb_confs + 1, dtype=np.uint16)
         indices = []
         for d in range(self.n_hb_confs):
             neighbors = self.hb_adj.get(d, ())
             indices.extend(sorted(neighbors))
             indptr[d + 1] = indptr[d] + len(neighbors)
 
-        return np.array(indices, dtype=np.int32), indptr
+        return np.array(indices, dtype=np.uint16), indptr
 
     def process_ms_pairs(self, microstate: np.ndarray, count: int):
         """
         Processes a single microstate and updates H-bond pairs matrix.
         """
         # Boolean membership mask
-        ms_mask = np.zeros(self.n_hb_confs, dtype=np.uint8)
+        ms_mask = np.zeros(self.n_hb_confs, dtype=np.uint16)
         ms_mask[microstate] = 1
         _process_hbpairs_numba(microstate, count,
                                self.hb_adj_indices, self.hb_adj_indptr, ms_mask,
@@ -1120,9 +1120,9 @@ class MSout_hb:
                     # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free residues in state
                     current_state = [int(i) for i in line.split(":")[1].split()]
                     if self.extended_iconfs:
-                        xs = np.array(current_state + self.extended_iconfs, dtype=np.int32)
+                        xs = np.array(current_state + self.extended_iconfs, dtype=np.uint16)
                     else:
-                        xs = np.array(current_state, dtype=np.int32)
+                        xs = np.array(current_state, dtype=np.uint16)
                     newmc = False
                     continue
 
@@ -1172,12 +1172,9 @@ class MSout_hb:
     def load_hb_pairs(self):
         """Process the 'msout file' for H-bonding pairs.
         Populate hb_pairs dict with the pair as index and [count, occ] as value.
-        Notes:
+        Note:
          - The occ of the pair is that obtained over the entire state space, meaning
            it is consistent with the occupancies of the pair members from fort.38.
-         - The 'effective' occ of a hb_pair is hb_state-dependent: it is the occ of the
-           hb_state where it occurs; It can be obtained when the `ms_hbnets` tool is called
-           with the --load_states option.
         """
         found_mc = False
         newmc = False
@@ -1202,9 +1199,9 @@ class MSout_hb:
                     # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free residues in state
                     current_state = [int(i) for i in line.split(":")[1].split()]
                     if self.extended_iconfs:
-                        xs = np.array(current_state + self.extended_iconfs, dtype=np.int32)
+                        xs = np.array(current_state + self.extended_iconfs, dtype=np.uint16)
                     else:
-                        xs = np.array(current_state, dtype=np.int32)
+                        xs = np.array(current_state, dtype=np.uint16)
 
                     newmc = False
                     continue
@@ -1354,9 +1351,12 @@ class MSout_hb:
                 fo.write(STATES_PAIRS_COMMENT)
                 dfsp_res.to_csv(fo, index=False)
 
-            # exclude indices, sort & save
-            dfs = dfs[["state_id","averE","count","occ"]].sort_values(by="count",
-                                                                      ascending=False)
+            # reorder cols, sort & save
+            # Note, 11-10-26: Reinstated the index (the stateid as tuple of integers) because
+            #                 this is the only way to obtain the 'confnum to confid' mapping
+            #                 when the data is not reloaded.
+            dfs = dfs[["index","state_id","averE","count","occ"]].sort_values(by="count",
+                                                                              ascending=False)
             # build comment about % returned states
             note = (f"# Data for the {self.n_hb_states:,} returned occupied "
                     f"hb_states (@ {self.min_occ_print}) whose sum count represents "
@@ -1466,7 +1466,7 @@ class MSout_hb:
             start_t = time()
             self.hb_adj = self.get_adjacency_dict()
             self.hb_adj_indices, self.hb_adj_indptr = self.get_adj_idx_idxptr()
-            self.P = np.zeros((self.n_hb_confs, self.n_hb_confs), dtype=np.int32)
+            self.P = np.zeros((self.n_hb_confs, self.n_hb_confs), dtype=np.uint16)
             self.load_hb_pairs()
             logging.info(self.__str__())
             logging.info(show_elapsed_time(start_t, info="Loading H-bonding pairs"))
