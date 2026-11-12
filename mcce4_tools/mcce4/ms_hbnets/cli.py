@@ -53,6 +53,7 @@ PLOTTING_ARGS = [
     'figsize_donor_corr_bk',
     'figsize_acceptor_corr',
     'figsize_acceptor_corr_bk',
+    'publication',
 ]
 
 
@@ -289,6 +290,11 @@ Format example:
                     action="store_true",
                     default=False,
                     help="Reload the microstates data (overwrites existing output files); Default: %(default)s"
+                    )
+    cp.add_argument("--publication",
+                    action="store_true",
+                    default=False,
+                    help="Generate publication-quality figures (no titles); Default: %(default)s"
                     )
     cp.add_argument("-v", "--verbose",
                     action="store_true",
