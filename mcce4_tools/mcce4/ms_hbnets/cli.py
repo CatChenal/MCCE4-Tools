@@ -31,7 +31,7 @@ from mcce4.io_utils import N_STATES
 from mcce4.ms_hbnets.correlator import HbCorrelator, VALID_COFACTOR_SEPS
 from mcce4.ms_hbnets.msout_hb import do_checks
 from mcce4.ms_hbnets.msout_hb import is_int
-from mcce4.ms_hbnets.msout_hb import MIN_OCC, printed_occ
+from mcce4.ms_hbnets.msout_hb import MIN_OCC  #, printed_occ
 from mcce4.ms_hbnets.msout_hb import MSout_hb
 from mcce4.ms_hbnets.plotting import DEFAULT_FIGSIZE, AVAIL_COLORS
 
@@ -63,7 +63,7 @@ def process_pairs(args: Union[dict, Namespace]):
 
     mshb = MSout_hb(args.mcce_dir, args.ph, args.eh,
                     load_states=False,
-                    min_occ=float(args.min_occ),
+                    #min_occ=float(args.min_occ),
                     reload = args.reload,
                     verbose=args.verbose)
 
@@ -109,7 +109,7 @@ def process_states(args: Union[dict, Namespace]):
     mshb = MSout_hb(args.mcce_dir, args.ph, args.eh,
                     n_target_states=args.n_states,
                     load_states=True,
-                    min_occ=float(args.min_occ),
+                    #min_occ=float(args.min_occ),
                     reload = args.reload,
                     verbose=args.verbose)
 
@@ -251,7 +251,7 @@ def cli_parser():
     cp.add_argument("-min-occ",
                     type=float,
                     default=MIN_OCC,
-                    help="To return data with occ >= min-occ; Default: " + printed_occ
+                    help="To return data with occ >= min-occ or occ > 0; Default: %(default)s"
                     )
     cp.add_argument("-res-of-interest",
                     default=None,

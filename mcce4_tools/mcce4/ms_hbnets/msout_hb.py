@@ -67,14 +67,15 @@ HAH_FNAME_INIT = "step2_out_hah.txt"
 fHAH_FNAME = "hah_{}.txt"
 fHAH_EXPANDED = "expanded_hah_{}.csv"
 fPAIR_RES = "hb_pairs_res_{}.csv"
-STATES_PAIRS_COMMENT = "# States hb pairs; state count, occ: per returned occupied states\n"
-
+# removed misleading comment: occ of states pairs is over entire space
+# STATES_PAIRS_COMMENT = "# States hb pairs; state count, occ: per returned occupied states\n"
 
 # the largest spaces ever seen are in the order of millions;
 # the occ returned but the loading functions are rounded to this precision:
-PREC = 6
-MIN_OCC = 10**(-PREC)
-printed_occ = "0." + "".join('0' for i in range(PREC - 1)) + "1"
+# PREC = 6
+# MIN_OCC = 10**(-PREC)
+# printed_occ = "0." + "".join('0' for i in range(PREC - 1)) + "1"
+MIN_OCC = 0  # occupied: > MIN_OCC
 
 
 # mapping of iconf (donor, acceptor) pairs for filtering purposes:
@@ -91,18 +92,6 @@ pair_classes = {
                 (0, 1): 3,     # fixed, free: extended matrix
                 (-1,1): 3,     # bk, free: extended matrix
                 }
-
-
-def num_prec(num: Union[float, int]) -> int:
-    if isinstance(num, int):
-        return 0
-    num_str = str(num).lower()
-    if 'e' in num_str:
-        return int("".join(c for c in num_str.split('e')[1] if c.isnumeric()))
-        
-    if '.' in num_str:
-        return len(num_str.split('.')[1])
-    return 0
 
 
 def get_resid(confid:str) -> str:
@@ -132,7 +121,7 @@ def group_confids_into_resids(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.groupby(["res_d","res_a"], as_index=False).agg(
             {"count":"sum", "occ": "sum", "with_bk": "max"})
-    df["occ"] = df["occ"].round(PREC)
+    #df["occ"] = df["occ"].round(PREC)
     df["count"] = df["count"].round(0).astype("int32")
 
     return df.sort_values(by="count", ascending=False)
@@ -579,7 +568,7 @@ class MSout_hb:
     def __init__(self, mcce_dir: str, ph: str = "7", eh: str = "0",
                  n_target_states: int = N_STATES,
                  load_states: bool = False,
-                 min_occ: float = MIN_OCC,
+                 #min_occ: float = MIN_OCC,
                  reload: bool = False,
                  verbose: bool = False):
         
@@ -646,9 +635,9 @@ class MSout_hb:
             self.proceed = False
             return
 
-        self.min_occ = float(min_occ)
-        self.prec = num_prec(self.min_occ)
-        self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
+        # self.min_occ = float(min_occ)
+        # self.prec = num_prec(self.min_occ)
+        # self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
 
         # attributes populated by get_extended_iconfs:
         self.n_fx: int = 0
@@ -1153,8 +1142,9 @@ class MSout_hb:
         # update final states dict with aver E & occ if occ > 0.00001%:
         self.hb_states = defaultdict(lambda: [0., 0, 0.])   # [E, count, occ]
         for s in hb_states:
-            occ = round(hb_states[s][1]/self.n_space, PREC)
-            if occ >= self.min_occ:
+            # occ = round(hb_states[s][1]/self.n_space, PREC)
+            occ = hb_states[s][1]/self.n_space
+            if occ > MIN_OCC:
                 # size of the returned hb states space:
                 self.n_hb_space += hb_states[s][1]
                 # average E:
@@ -1165,7 +1155,7 @@ class MSout_hb:
         self.hb_states = dict(self.hb_states)
         self.n_hb_states = len(self.hb_states)
         if not self.n_hb_states:
-            logging.warning(f"No hb states found @ {self.min_occ_print}")
+            logging.warning(f"No occupied hb states found.")
 
         return
 
@@ -1230,22 +1220,24 @@ class MSout_hb:
         # Save to list where each item is [(pi, pj), count, occ]
         self.hb_pairs = []
         # Added: Missing filtering for given min occ:
-        indices = np.argwhere(self.P/self.n_space >= self.min_occ)
+        # indices = np.argwhere(self.P/self.n_space >= self.min_occ)
+        indices = np.argwhere(self.P/self.n_space > MIN_OCC)
         self.n_hb_pairs = indices.shape[0]
         if not self.n_hb_pairs: 
-            logging.warning(f"No hb pairs found @ {self.min_occ_print}")
+            logging.warning("No occupied hb pairs found.")
         else:
+            # removed: # round(self.P[p[0], p[1]].sum(axis=0)/self.n_space, PREC)
             if self.n_hb_pairs > 1:
                 for p in indices:
                     self.hb_pairs.append([(int(p[0]),int(p[1])),
                                           int(self.P[p[0], p[1]].sum(axis=0)),
-                                          round(self.P[p[0], p[1]].sum(axis=0)/self.n_space, PREC)
+                                          self.P[p[0], p[1]].sum(axis=0)/self.n_space
                                           ])
             else:   # no for-loop
                 p = indices[0]
                 self.hb_pairs.append([(int(p[0]),int(p[1])),
                                        int(self.P[p[0], p[1]].sum(axis=0)),
-                                       round(self.P[p[0], p[1]].sum(axis=0)/self.n_space, PREC)
+                                       self.P[p[0], p[1]].sum(axis=0)/self.n_space
                                        ])
         self.n_hb_space = max(self.hb_pairs, key=itemgetter(1))[1]
 
@@ -1254,7 +1246,7 @@ class MSout_hb:
     def hb_pairs_data2csv(self):
         if self.hb_pairs:
             df = pd.DataFrame(self.hb_pairs, columns=["index","count","occ"])
-            df["occ"] = df["occ"].round(PREC)
+            #df["occ"] = df["occ"].round(PREC)
             df["count"] = df["count"].astype("int32")
             df[["Mi","Mj"]] = df["index"].apply(lambda x: pd.Series([int(x[0]),int(x[1])]))
             df[["donor","acceptor"]] = df["index"].apply(
@@ -1264,7 +1256,7 @@ class MSout_hb:
 
             # build comment about % returned pairs
             note = (f"# Data for the {self.n_hb_pairs:,} "
-                    f"occupied hb_pairs (@ {self.min_occ_print}) whose max count represents "
+                    f"occupied hb_pairs (occ > 0) whose max count represents "
                     f"{self.n_hb_space/self.n_space:.2%} of the "
                     f"entire space ({self.n_hb_space:,}/{self.n_space:,})\n"
             )
@@ -1312,7 +1304,7 @@ class MSout_hb:
                                          columns=["averE", "count", "occ"]
                                          ).reset_index()
             dfs["averE"] = dfs["averE"].round(2)
-            dfs["occ"] = dfs["occ"].round(PREC)
+            # dfs["occ"] = dfs["occ"].round(PREC)
             dfs["state_id"] = None
 
             # get the unique hb pairs in all the returned hb microstates:
@@ -1336,7 +1328,7 @@ class MSout_hb:
             dfsp[["donor","acceptor"]] = dfsp["index"].apply(
                 lambda x: pd.Series([self.iconf2confid[x[0]],
                                      self.iconf2confid[x[1]]]))
-            dfsp["occ"] = dfsp["occ"].round(PREC)
+            #dfsp["occ"] = dfsp["occ"].round(PREC)
 
             # add short residue-based confid as in pairs_res file
             dfsp[["res_d","res_a"]] = dfsp.apply(
@@ -1347,9 +1339,7 @@ class MSout_hb:
 
             # output file has same format as hb_pairs_res file
             dfsp_res = group_confids_into_resids(dfsp)
-            with open(self.states_pairs_csv, "w") as fo:
-                fo.write(STATES_PAIRS_COMMENT)
-                dfsp_res.to_csv(fo, index=False)
+            dfsp_res.to_csv(self.states_pairs_csv, index=False)
 
             # reorder cols, sort & save
             # Note, 11-10-26: Reinstated the index (the stateid as tuple of integers) because
@@ -1359,7 +1349,7 @@ class MSout_hb:
                                                                               ascending=False)
             # build comment about % returned states
             note = (f"# Data for the {self.n_hb_states:,} returned occupied "
-                    f"hb_states (@ {self.min_occ_print}) whose sum count represents "
+                    f"hb_states (occ > 0) whose sum count represents "
                     f"{self.n_hb_space/self.n_space:.2%} of the "
                     f"entire space ({self.n_hb_space:,}/{self.n_space:,})\n"
             )
@@ -1393,7 +1383,7 @@ class MSout_hb:
         """Text to output similar info for 'pairs' or 'states' processing.
         """
         txt = f"\nMicrostates space: {self.n_space:,}\n"
-        txt = txt + f"Occupied H-bonding space @ {self.min_occ_print}: {self.n_hb_space:,} "
+        txt = txt + f"Occupied H-bonding space (occ > 0) {self.n_hb_space:,} "
         txt = txt + f"({self.n_hb_space/self.n_space:.2%} of state space)\n"
         if self.load_states:       
             txt = txt + f"Saved occupied H-bonding states: {self.n_hb_states:,} (target: {self.n_target_states:,})\n"

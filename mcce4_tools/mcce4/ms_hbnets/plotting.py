@@ -105,6 +105,9 @@ def get_cmap_bnorm(map_kind: str = "data",
     return cmap, bnorm
 
 
+fig_font_size = {True: 34, False: 10}  # True :: publication
+
+
 def plot_heatmap(df: pd.DataFrame,
                  ax=None,
                  fig=None,
@@ -144,23 +147,13 @@ def plot_heatmap(df: pd.DataFrame,
     ax.invert_yaxis()
 
     ax.tick_params(axis='both', direction='out', length=7, width=1.5)
-
-    if not publication:
-        font_size = 12
-    else:
-        font_size = 32
+    font_size = fig_font_size[publication]
     
     # use labels from df
     xlabels = df.columns.tolist()
     if split_x:
         xlabels = split_ids(xlabels)
     ax.set_xticks(x, labels=xlabels, fontsize=font_size)
-    if publication:
-        xtl = ax.get_xticklabels()
-        if axis_ticklabels_overlap(xtl):
-            plt.setp(xtl, rotation=40,
-                     ha="right", rotation_mode="anchor")
- 
     ylabels = df.index.tolist()
     if split_y:
         ylabels = split_ids(ylabels)
@@ -177,18 +170,17 @@ def plot_heatmap(df: pd.DataFrame,
     )
     cb.outline.set_linewidth(0)
     cb.ax.tick_params(labelsize=font_size)
-    if map_kind == "data":
-        cb.set_label('Occupancy', rotation=270,
-                     labelpad=font_size * 0.8,
-                     fontsize=font_size)
-    else:
-        cb.set_label('Occupancy correlation', rotation=270,
-                     labelpad=font_size * 0.8,
-                     fontsize=font_size)
+    cb_title = "Occupancy" if map_kind == "data" else "Occupancy correlation"
+    cb.set_label(cb_title,
+                 rotation=270,
+                 labelpad=font_size * 0.8,
+                 fontsize=font_size
+                 )
     # also rasterize the colorbar to avoid white lines on the PDF rendering
     cb.solids.set_rasterized(True)
 
     # Draw fig
+    ax.set_aspect("equal")
     fig.canvas.draw()
     if fig.stale:
         try:
@@ -196,20 +188,24 @@ def plot_heatmap(df: pd.DataFrame,
         except AttributeError:
             pass
 
-    if not (split_x or split_y):
-        # Possibly rotate them if they overlap
-        xtl = ax.get_xticklabels()
-        if axis_ticklabels_overlap(xtl):
+    # Possibly rotate the labels if they overlap
+    xtl = ax.get_xticklabels()
+    if axis_ticklabels_overlap(xtl):
+        if not split_x:
             plt.setp(xtl, rotation="vertical")
-        # ytl = ax.get_yticklabels()
-        # if axis_ticklabels_overlap(ytl):
-        #    plt.setp(ytl, rotation="horizontal")
+        else:
+            # this does not anything:
+            # if publication:
+            #     for tick in ax.xaxis.get_major_ticks()[1::2]:
+            #         tick.set_pad(18)
+            plt.setp(xtl, rotation=50, ha="right", rotation_mode="anchor")
+
+            ax.apply_aspect()
 
     # Add the axis labels
     ax.set(xlabel=df.columns.name, ylabel=df.index.name)
     ax.xaxis.label.set_size(font_size)
     ax.yaxis.label.set_size(font_size)
-    ax.set_aspect("equal")
 
     return ax
 
@@ -254,7 +250,7 @@ def heatmap_from_df(df: pd.DataFrame,
     figsize = maybe_resize(fig_size, df.shape)
     fig, ax = plt.subplots(1,1, figsize=figsize, layout='constrained')
     if not publication:
-        ax.set_title(title, fontdict={'weight':'bold', "size":12})
+        ax.set_title(title, fontdict={'weight':'bold', "size": 10})
     
     plot_heatmap(df, ax=ax, fig=fig,
                  map_kind=map_kind,
@@ -266,7 +262,7 @@ def heatmap_from_df(df: pd.DataFrame,
                  )
 
     if fig_save_fp is not None:
-        plt.savefig(fig_save_fp, dpi=400) #, bbox_inches="tight")
+        plt.savefig(fig_save_fp, dpi=400, bbox_inches="tight")
         logging.info(f"  Figure: {fig_save_fp!s}; Size: {figsize}")
 
     plt.draw()
