@@ -25,8 +25,8 @@ import pandas as pd
 
 from mcce4.constants import res3_to_res1
 from mcce4.io_utils import show_elapsed_time
-from mcce4.ms_hbnets.msout_hb import get_resid, group_confids_into_resids, num_prec
-from mcce4.ms_hbnets.msout_hb import MIN_OCC, STATES_PAIRS_COMMENT
+from mcce4.ms_hbnets.msout_hb import get_resid, group_confids_into_resids
+from mcce4.ms_hbnets.msout_hb import MIN_OCC
 from mcce4.ms_hbnets.msout_hb import MSout_hb
 from mcce4.ms_hbnets.plotting import DEFAULT_FIGSIZE
 from mcce4.ms_hbnets.plotting import heatmap_from_df
@@ -180,6 +180,18 @@ def maybe_convert_condensed_ids(df: pd.DataFrame) -> bool:
     return bool(mskp.any())
 
 
+def num_prec(num: Union[float, int]) -> int:
+    if isinstance(num, int):
+        return 0
+    num_str = str(num).lower()
+    if 'e' in num_str:
+        return int("".join(c for c in num_str.split('e')[1] if c.isnumeric()))
+        
+    if '.' in num_str:
+        return len(num_str.split('.')[1])
+    return 0
+
+
 class HbCorrelator:
     def __init__(self, hbms: MSout_hb,
                  hb_kind: str = None,
@@ -223,7 +235,10 @@ class HbCorrelator:
         self.pheh_str = hbms.pheh_str
         self.min_occ = min_occ
         self.prec = num_prec(float(self.min_occ))
-        self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
+        if self.min_occ == MIN_OCC:
+            self.min_occ_print = f"min occ > {self.min_occ:.{self.prec}f}"
+        else:
+            self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
         logging.info(f"Heatmaps min_occ: {self.min_occ_print}")
 
         self.grotthus = grotthus
@@ -339,13 +354,12 @@ class HbCorrelator:
             lambda row: row["res_d"][2:4]=="BK" or row["res_a"][2:4]=="BK", axis=1)
         df_res = group_confids_into_resids(df)
 
-        if self.hb_kind == "states":
-            with open(self.input_fp2, "w") as fo:
-                fo.write(STATES_PAIRS_COMMENT)
-                df_res.to_csv(fo, index=False)
-        else:
-            df_res.to_csv(self.input_fp2, index=False)
-
+        # if self.hb_kind == "states":
+        #     with open(self.input_fp2, "w") as fo:
+        #         fo.write(STATES_PAIRS_COMMENT)
+        #         df_res.to_csv(fo, index=False)
+        # else:
+        df_res.to_csv(self.input_fp2, index=False)
         logging.info(f"Updated the format of {self.input_fp2.name}")
 
         return df_res
@@ -471,15 +485,17 @@ class HbCorrelator:
                 self.ok = False
                 return
 
-        # apply min occ mask:
-        resdf["occ"] = resdf["occ"].round(self.prec)
-        occ_msk = resdf["occ"].ge(self.min_occ)
-        if occ_msk.any():
-            resdf = resdf.loc[occ_msk]
-        else:
-            logging.warning(f"No hb pairs data @ {self.min_occ_print}")
-            self.ok = False
-            return
+        # apply min occ mask if occ not default:
+        #resdf["occ"] = resdf["occ"].round(self.prec)
+        if self.min_occ != MIN_OCC:
+            occ_msk = resdf["occ"].ge(self.min_occ)
+            if occ_msk.any():
+                resdf = resdf.loc[occ_msk]
+                self.filtered = True
+            else:
+                logging.warning(f"No hb pairs data @ {self.min_occ_print}")
+                self.ok = False
+                return
 
         # sort by resnum:
         resdf["di"] = resdf["res_d"].apply(get_resnum)
