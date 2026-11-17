@@ -1,0 +1,473 @@
+#!/usr/bin/env python3
+
+"""
+Module: cli.py
+
+Codebase: mcce4/ms_hbnets2/cli.py
+
+Command line interface for the ms_hbnets2 tool.
+
+Gathers the H-bonding conformer pairs and states occupancies from the
+microstates file specified by a mcce dir, pH & Eh (if the corresponding
+output files are not found), and saves several heatmaps:
+ - The Donors correlation and the Acceptors correlation for both hb pairs
+   and hb states
+ - The 'co-occurence heatmap', which is the hb_pairs_res_pH*.csv or 
+   hb_states_pairs_pH*.csv data as a figure
+
+ Requires the structural H-bonds data output by the `detect_hbonds` tool.
+"""
+from argparse import ArgumentParser
+from argparse import Namespace
+from argparse import RawTextHelpFormatter
+from datetime import datetime
+import logging
+from pathlib import Path
+from typing import Union
+
+import matplotlib.pyplot as plt
+
+from mcce4.ms_hbnets2.correlator import HbCorrelator, VALID_COFACTOR_SEPS
+from mcce4.ms_hbnets2.msout_hb import do_checks, is_int
+from mcce4.ms_hbnets2.msout_hb import MIN_OCC, SAMPLE_PCT
+from mcce4.ms_hbnets2.msout_hb import MSout_hb
+from mcce4.ms_hbnets2.plotting import DEFAULT_FIGSIZE, AVAIL_COLORS
+
+
+APP = "ms_hbnets2"
+
+
+PLOTTING_ARGS = [
+    'data_cbar_min',
+    'data_map_color',
+    'figsize_data',
+    'figsize_data_bk',
+    'split_labels',
+    'split_x',
+    'split_y',
+    'figsize_corr',
+    'figsize_corr_bk',
+    'figsize_donor_corr',
+    'figsize_donor_corr_bk',
+    'figsize_acceptor_corr',
+    'figsize_acceptor_corr_bk',
+    'publication',
+]
+
+
+def process_pairs(args: Union[dict, Namespace]):
+    if isinstance(args, dict):
+        args = Namespace(**args)
+
+    mshb = MSout_hb(args.mcce_dir, args.ph, args.eh,
+                    load_states=False,
+                    reload = args.reload,
+                    verbose=args.verbose)
+
+    if not mshb.proceed:
+        logging.critical(f"The H-bond collection pipeline cannot be run in {Path(args.mcce_dir).resolve()!s}")
+        return
+
+    mshb.run_ms_pipeline(load_states=False)
+    # the msout loader can reset the flag when some ouputs are missing,
+    # in which case the loader display the info, so we don't repeat it here
+    if not mshb.reload:
+        logging.info(mshb)
+    logging.info("Microstates H_bonds collection for pairs over.")
+
+    if args.run_checks:
+        status = do_checks(args.mcce_dir, args.ph, args.eh)
+        if status:
+            logging.info("Pairs H_bonds checks: passed.")
+        else:
+            logging.info("Pairs H_bonds checks: failed.")
+        return
+
+    figs_args = {k: v for k, v in vars(args).items() if k in PLOTTING_ARGS}
+    HbCorr = HbCorrelator(mshb,
+                          hb_kind="pairs",
+                          res_of_interest=args.res_of_interest,
+                          grotthus=args.grotthus,
+                          pairs_of_interest_fp=args.pairs_of_interest_csv,
+                          min_occ=float(args.min_occ),
+                          split_BK=args.split_BK,
+                          figs_args=figs_args,
+    )
+    HbCorr.process_pairs()
+    if HbCorr.ok:
+        plt.show()
+
+    return
+
+
+def process_states(args: Union[dict, Namespace]):
+
+    if isinstance(args, dict):
+        args = Namespace(**args)
+
+    mshb = MSout_hb(args.mcce_dir, args.ph, args.eh,
+                    sample_pct=args.sample_pct,
+                    load_states=True,
+                    reload = args.reload,
+                    verbose=args.verbose)
+
+    if not mshb.proceed:
+        logging.critical(f"The H-bond collection pipeline cannot be run in {Path(args.mcce_dir).resolve()!s}")
+        return
+
+    mshb.run_ms_pipeline(load_states=True)
+    if not mshb.reload:
+        logging.info(mshb)
+    logging.info("Microstates H_bonds collection over.")
+
+    if args.run_checks:
+        status = do_checks(args.mcce_dir, args.ph, args.eh)
+        if status:
+            logging.info("Microstates H_bonds checks: passed.")
+        else:
+            logging.critical("Microstates H_bonds checks: failed.")
+        return
+
+    figs_args = {k: v for k, v in vars(args).items() if k in PLOTTING_ARGS}
+    HbCorr = HbCorrelator(mshb,
+                          hb_kind="states",
+                          res_of_interest=args.res_of_interest,
+                          grotthus=args.grotthus,
+                          pairs_of_interest_fp=args.pairs_of_interest_csv,
+                          min_occ=float(args.min_occ),
+                          include_states_da_corr=args.do_states_da_corr,
+                          split_BK=args.split_BK,
+                          figs_args=figs_args,
+    )
+    HbCorr.process_states()
+    if HbCorr.ok:
+        plt.show()
+
+    return
+
+
+def to_figsize(strtpl: str):
+    """Process option as figure size, (width, height, unit).
+    One of width or height may be None; the respective value is 
+    taken from the app default figsize (rcParams["figure.figsize"]
+    default would be [6.4, 4.8]).
+    If third item: must be one of "in", "cm" (removed "px" unit:
+    would make no sense with default values).
+    Option value examples:
+      ",3,cm" -> 6,3,'cm' :: change default H, change unit to cm;
+      ",,cm" -> 6,6,'cm' :: default size but in cm.
+    """
+    # Split by comma and convert individual items
+    nums = strtpl.split(',')
+    if len(nums) < 2:
+        logging.warning("Option value: figsize must evaluate to at least a 2-tuple: 'w,h' or ',h' or 'w,'; default used.")
+        return DEFAULT_FIGSIZE
+
+    if not nums[0]:
+        nums[0] = DEFAULT_FIGSIZE[0]  # None would mean 6.4
+    if not nums[1]:
+        nums[1] = DEFAULT_FIGSIZE[1]  # None would mean 4.8
+
+    unit = None
+    if len(nums) == 3 and isinstance(nums[2], str):
+        if nums[2] in ["in", "cm"]:
+            unit = nums[2]
+            # else ignored;
+    w = int(nums[0]) if is_int(nums[0]) else round(float(nums[0]),2)
+    h = int(nums[1]) if is_int(nums[1]) else round(float(nums[1]),2)
+
+    if unit is None:
+        return w, h
+    else:
+        return w, h, unit
+
+
+DESC = """
+Gathers the H-bonding conformer pairs and states occupancies from the
+microstates file specified by a mcce dir, pH & Eh (if the corresponding
+output files are not found or --reload is true), and saves several heatmaps:
+Data heatmaps:
+  - The hb_states_pairs or hb_pairs_res heatmaps
+Correlation heatmaps:
+  - The hb pairs Donors and the Acceptors correlation heatmaps
+  - The microstates pairs heatmaps
+Also saves the filtered pairs file to <file>_filtered.csv.
+""" + f"""
+The default heatmaps size is {DEFAULT_FIGSIZE} with implied unit 'in'.
+REQUIRES: The structural H-bonds data output by the `detect_hbonds` tool.
+"""
+ 
+roi_help = f"""String of case-insensitive one-letter residue codes (minimal case); Default: None
+Takes precedence over -pairs-of-interest-csv if given. String must be quoted when listing cofactors.
+Extended string: AA+ or "AA|XYZ<sep>abc" where <sep> is one of these characters: {VALID_COFACTOR_SEPS!r}
+Examples:
+ -res-of-interest EHK             # no res-bk pairs, no cofactors
+ -res-of-interest EHK+            # keep res-bk pairs, no cofactors
+ -res-of-interest "EHK+|HOH PL9"  # keep res-bk pairs, water and PL9 cofactor
+ -res-of-interest "EHK|HOH.pl9"   # no res-bk pairs, water and PL9 cofactor
+ -res-of-interest "|HOH,PL9"      # no res, water and PL9 cofactor
+Note:
+  When filtering with residues, it is very likely that -figsize-data must be reduced, ex: -figsize-data 5,5
+"""
+
+grot_help = """To filter hb pairs with Grotthus-competenet residues in short list (DESTCYHK); Default: False
+Examples:
+ * Request for the short list with additional cofactor(s):
+   ms_hbnets2 pairs -res-of-interest "|xyz" --grotthus   # same as: -res-of-interest "DESTCYHK|HOH,xyz"
+ * Request for the short list of Grotthus-competent residues plus N:
+   ms_hbnets2 states -res-of-interest N --grotthus       # same as: -res-of-interest "DESTCYHKN|HOH"
+ * Request for the long list of Grotthus-competent residues:
+   ms_hbnets2 states -res-of-interest NQR --grotthus     # same as: -res-of-interest "DESTCYHKNQR|HOH"
+"""
+
+def cli_parser():
+    p = ArgumentParser(prog=APP,
+        usage="""ms_hbnets2 pairs [+ options if non-default]; see ms_hbnets2 pairs -h
+       ms_hbnets2 states [+ options if non-default]; see ms_hbnets2 pairs -h""",
+        description=DESC,
+    formatter_class=RawTextHelpFormatter,
+    )
+    # COMMON parser: for pairs and states processing
+    cp = ArgumentParser(add_help=False, formatter_class=RawTextHelpFormatter)
+    cp.add_argument(
+        "-mcce-dir",
+        default=".",
+        type=str,
+        help="MCCE run directory; Default: %(default)s",
+    )
+    # ph, eh: as strings to easily determine the precision
+    cp.add_argument("-ph",
+                    default="7",
+                    type=str,
+                    help="Titration pH; Default: %(default)s"
+                    )
+    cp.add_argument("-eh",
+                    default="0",
+                    type=str,
+                    help="Titration Eh; Default: %(default)s"
+                    )
+    cp.add_argument("-min-occ",
+                    type=float,
+                    default=MIN_OCC,
+                    help="To return data with occ >= min-occ or occ > 0; Default: %(default)s"
+                    )
+    cp.add_argument("-res-of-interest",
+                    default=None,
+                    help=roi_help,
+)
+    cp.add_argument("-pairs-of-interest-csv",
+                    default=None,
+                    help="""File listing comma-separated H-bonding pairs in resid format that will 
+filter the main data file prior to producing the heatmaps; Default: %(default)s
+Format example: 
+  AR112,AN106
+  CSBK50,BD48
+"""
+)
+    cp.add_argument("-data-cbar-min",
+                    type=float,
+                    default=0.0,
+                    help="Lower bound of the colorbar in the data heatmaps; Default: %(default)s"
+                    )
+    cp.add_argument("-data-map-color",
+                    type=str,
+                    default="Reds",
+                    help=f"Color of the data heatmaps, one of: {AVAIL_COLORS}; Default: %(default)s"
+                    )
+    cp.add_argument("--grotthus",
+                    action="store_true",
+                    default=False,
+                    help=grot_help
+                    )
+    cp.add_argument("--run-checks",
+                    action="store_true",
+                    default=False,
+                    help="Only perform checks on main outputs (lengthy operation!); Default: %(default)s"
+                    )
+    cp.add_argument("--reload",
+                    action="store_true",
+                    default=False,
+                    help="Reload the microstates data (overwrites existing output files); Default: %(default)s"
+                    )
+    cp.add_argument("--publication",
+                    action="store_true",
+                    default=False,
+                    help="Generate publication-quality figures (no titles); Default: %(default)s"
+                    )
+    cp.add_argument("-v", "--verbose",
+                    action="store_true",
+                    default=False,
+                    help="Output more details from the mshout file loader; Default: %(default)s"
+                    )
+    subparsers = p.add_subparsers(
+        required=True,
+        title=f"{APP} sub-commands",
+        dest="subparser_name",
+    )
+    sub1 = subparsers.add_parser("pairs",
+        usage="""ms_hbnets2 pairs -ph 5                     # get hb pairs at a non-default pH (--reload needed if outputs exist)
+       ms_hbnets2 pairs -figsize-data 8,6         # change the data heatmap size, w=8, h=6;
+       ms_hbnets2 pairs -figsize-data ,,cm        # change the unit of the data heatmap to cm
+       ms_hbnets2 pairs -data-cbar-min 0.3        # change the cbar lowest bound of the data heatmap
+       ms_hbnets2 pairs -data-map-color Greens    # change the color of the data heatmap
+       ms_hbnets2 pairs -res-of-interest DEHK+BK  # filter for these residues (keep BK)
+       """,
+        description="""
+Gathers the H-bond pairs data (the occupancy of hb pairs over all microstates), if needed or --reload is true,
+then outputs the data and correlation heatmaps.
+""",
+        formatter_class=RawTextHelpFormatter,
+        parents=[cp],
+    )
+    sub1.add_argument("-figsize-data",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""Data as figure; Size of the pairs data heatmap; 
+The default size is ok for ~30 residues; Default: %(default)s"""
+    )
+    sub1.add_argument("-figsize-data-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --split-BK is used or no filtering pairs are provided, the data is divided into res-res and
+res-bk pairs. Size of the res-bk pairs data heatmap; Default: %(default)s"""
+    )
+    sub1.add_argument("-figsize-donor-corr",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="Size of the Donors correlation heatmap; Default: %(default)s"
+    )
+    sub1.add_argument("-figsize-donor-corr-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --split-BK is used or no filtering pairs are provided, the data is divided into res-res and
+res-bk pairs. Size of the res-bk Donors correlation heatmap; Default: %(default)s"""
+    )
+    sub1.add_argument("-figsize-acceptor-corr",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="Size of the Acceptors correlation heatmap; Default: %(default)s"
+    )
+    sub1.add_argument("-figsize-acceptor-corr-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --split-BK is used or no filtering pairs are provided, the data is divided into res-res and
+res-bk pairs. Size of the res-bk Acceptors correlation heatmap; Default: %(default)s"""
+    )
+    sub1.add_argument("--split-BK",
+                      action="store_true",
+                      default=False,
+                      help="""To divide the pairs into res-res and res-bk groups and 
+compute each group correlation. Always true without filtering with pairs of interest; Default: %(default)s""",
+    )
+    sub1.set_defaults(func=process_pairs)
+
+    sub2 = subparsers.add_parser("states",
+    usage="""ms_hbnets2 states -ph 5                     # get hb states at a non-default pH
+       ms_hbnets states2 -sample-pct 10            # return a sample of hb microstates of length 10/100 x n_hb_states
+       ms_hbnets states2 -sample-pct 10 --reload   # get a new sample of hb microstates of length 10/100 x n_hb_states
+       ms_hbnets states2 -figsize-data ,8          # change the data heatmap height, w=7, h=8
+       ms_hbnets states2 -figsize-data ,,cm        # change the unit of the data heatmap to cm
+       ms_hbnets states2 -data-cbar-min 0.3        # change the cbar lowest bound of the data heatmap
+       ms_hbnets states2 -data-map-color Greens    # change the color of the data heatmap
+       ms_hbnets states2 -res-of-interest DEHK+    # filter for these residues (+ means keep BK)""",
+        description="""
+Gathers the H-bond microstates data if needed or --reload is true, then outputs the data and correlation heatmaps.
+WARNING: The states correlation is NOT currently split into res-res, res-bk subsets: without filtering,
+""",
+        formatter_class=RawTextHelpFormatter,
+        parents=[cp],
+    )
+    sub2.add_argument("-sample-pct",
+                      type=int,
+                      default=SAMPLE_PCT,
+                      help="""Percentage (int) of H-bonding states to return from the msout array.
+Consult the header row of hb_states_pH*.csv to find out if it is adequate (`head -n1 hb_states_pH*.csv`); Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-data",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""Size of the states pairs data heatmap; Default: %(default)s
+The default size is ok for ~30 residues"""
+    )
+    sub2.add_argument("-figsize-data-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --split-BK is used or no filtering pairs are provided, the data is divided into res-res and
+res-bk pairs. Size of the states res-bk pairs data heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-corr",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""Size of the states pairs correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-corr-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --split-BK is used or no filtering pairs are provided, the data is divided into res-res and
+res-bk pairs. Size of the states res-bk pairs correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-donor-corr",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --do-states-da-corr is used, the state Donors and Acceptors correlation is included.
+Size of the states Donors correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-donor-corr_bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --do-states-da-corr and --split-BK are used, the state Donors and Acceptors correlation is included.
+Size of the states Donors correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-acceptor-corr",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --do-states-da-corr is used, the state Donors and Acceptors correlation is included.
+Size of the states Acceptors correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("-figsize-acceptor-corr-bk",
+                      type=to_figsize,
+                      default=DEFAULT_FIGSIZE,
+                      help="""If --do-states-da-corr and --split-BK are used, the state Donors and Acceptors correlation is included.
+Size of the states Acceptors correlation heatmap; Default: %(default)s"""
+    )
+    sub2.add_argument("--split-BK",
+                      action="store_true",
+                      default=False,
+                      help="""Divide the pairs into res-res and res-bk groups and 
+compute each group correlation. Always true if no pairs of interest given; Default: %(default)s""",
+    )
+    sub2.add_argument("--split-x",
+                    action="store_true",
+                    default=False,
+                    help="Stack x-axis labels vertically instead of inline ('AS24|AN27'); Default: %(default)s"
+                    )
+    sub2.add_argument("--split-y",
+                    action="store_true",
+                    default=False,
+                    help="Stack y-axis labels vertically instead of inline ('AS24|AN27'); Default: %(default)s"
+                    )
+    sub2.add_argument("--do-states-da-corr",
+                      action="store_true",
+                      default=False,
+                      help="Include the correlation of states Donors and Acceptors; Default: %(default)s",
+    )
+    sub2.set_defaults(func=process_states)
+
+    return p
+
+
+def run_header(args: Namespace) -> str:
+    opts_lines = "\n ".join(f"\t{k} = {v}" for k,v in vars(args).items())
+    # py 3.10: no double-quotes within f-strings
+    return (f"\n{'-' * 60}\n"
+            f"Tool {APP}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  Options used:\n{opts_lines}\n{'-' * 60}")
+
+
+def cli(argv=None):
+    p = cli_parser()
+    args = p.parse_args(argv)
+    #logging.info(run_header(args))
+    args.func(args)
+
+    return
