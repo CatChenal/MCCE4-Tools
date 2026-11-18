@@ -28,19 +28,19 @@ def hbms_array_histogram(hb_array_fp: Path, save_fp: Path, redo: bool = False):
     if save_fp.exists() and not redo:
         print("Histogram of hbms data already saved:", save_fp.name)
         return
+    hb_array_fp = Path(hb_array_fp)
     hb_arr = np.load(hb_array_fp, mmap_mode='r')
     x = hb_arr[:,0]
     _, ax = plt.subplots(1,1, figsize=(4,4), layout='constrained')
     _ = ax.hist(x, bins='auto', histtype='step', lw=1.5, cumulative=True, label="cummulative");
     _ = ax.hist(x, bins='auto', histtype='step', lw=1.5, cumulative=False, label="hist");
     ax.plot([max(x)], [x.shape[0]], 'o', label=f"max count={max(x)}\nstates={x.shape[0]:,}")
-    ax.set_title(f"H-bonding ms array\n({hb_array_fp.name})", fontsize=10)
+    ax.set_title(f"{hb_array_fp.parent.name} - H-bonding ms array\n({hb_array_fp.name})", fontsize=10)
     ax.yaxis.set_major_formatter(ticker.EngFormatter(unit='', places=0));
     ax.set(xlabel="hb state count", ylabel="hb states");
     ax.legend(loc='best')
     plt.savefig(save_fp, dpi=200, bbox_inches="tight")
     logging.info(f"H-bonding ms array histogram saved to: {save_fp.name}.")
-    # plt.draw()
 
     return
 

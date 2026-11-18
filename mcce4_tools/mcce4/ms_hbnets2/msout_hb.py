@@ -622,7 +622,7 @@ class MSout_hb:
                 logging.warning(f"Invalid sample_pct: {self.sample_pct}. Must be in (0, 100]. Reset to 100.")
                 self.sample_pct = 100
         
-        self.run_dir = Path(mcce_dir)
+        self.run_dir = Path(mcce_dir).resolve()
         self.msinfo_dict: dict = None
 
         start_setup = time()
@@ -1576,6 +1576,13 @@ class MSout_hb:
 
         self.load_states = load_states
         self.hb_kind = "states" if self.load_states else "pairs"
+
+        if self.load_states:
+            # check if histogram was saved
+            if self.hbms_array_fp.exists():
+                hist_png = self.hbms_array_fp.with_suffix(".png")
+                if not hist_png.exists():
+                    hbms_array_histogram(self.hbms_array_fp, hist_png)
 
         if not (self.reload or self.missing_files):
             return
