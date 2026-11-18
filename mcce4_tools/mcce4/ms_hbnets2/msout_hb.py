@@ -68,6 +68,8 @@ from mcce4.io_utils import get_mcce_filepaths, get_msout_size_info
 from mcce4.io_utils import reader_gen
 from mcce4.io_utils import show_elapsed_time
 from mcce4.io_utils import table_to_df
+from mcce4.ms_hbnets2.plotting import hbms_array_histogram
+
 
 show_elapsed = partial(show_elapsed_time, writer=logging.info)
 
@@ -1303,15 +1305,15 @@ class MSout_hb:
     def load_hbms_array(self):
         """Load H-bond microstates data from .npy file."""
         if not self.load_states:
-            logging.error("Call to load_hbms_array for pairs. Returning None")
+            logging.error("Wrong call to load_hbms_array for pairs. Returning None")
             return
 
         if self.hbms_array_fp.exists():
             logging.info("Using existing H-bond microstates array.")
         else:
             self._save_hb_states()
+        hbms_array_histogram(self.hbms_array_fp, self.hbms_array_fp.with_suffix(".png"))
 
-        print("load_hbms_array :: self.n_space is None?", self.n_space is None)
         self.hbms_array = np.load(self.hbms_array_fp, mmap_mode="r")
         self.n_hb_states = len(self.hbms_array)
         self.n_hb_space = self.hbms_array[:,0].sum()
