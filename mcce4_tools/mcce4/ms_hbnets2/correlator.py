@@ -17,19 +17,18 @@ from pprint import pformat
 from re import split as re_split, findall, search
 from tempfile import TemporaryDirectory
 from time import time
-from turtle import width
 from typing import Tuple, Union
 
 import numpy as np
 import pandas as pd
 
 from mcce4.constants import res3_to_res1
+from mcce4.ms_hbnets2.msout_hb import add_sas_group, accres2dict
 from mcce4.ms_hbnets2.msout_hb import get_resid, group_confids_into_resids
 from mcce4.ms_hbnets2.msout_hb import show_elapsed
-from mcce4.ms_hbnets2.msout_hb import MIN_OCC
-from mcce4.ms_hbnets2.msout_hb import MSout_hb
+from mcce4.ms_hbnets2.msout_hb import MSout_hb, MIN_OCC, PREC
 from mcce4.ms_hbnets2.plotting import DEFAULT_FIGSIZE
-from mcce4.ms_hbnets2.plotting import heatmap_from_df
+from mcce4.ms_hbnets2.plotting import format_num, heatmap_from_df
 
 
 DTYPE = "float32"
@@ -51,18 +50,6 @@ def get_file_header(file_fp: Union[str, Path]) -> str:
         return hdr
     else:
         return ""
-
-
-def format_num(num):
-    """Return condensed format for plots, up to millions.
-    """
-    M = 1_000_000
-    K = 1_000
-    if num > M:
-        return f"{num/M:.4g}M"
-    elif num > K:
-        return f"{num/K:.4g}K"
-    return num
 
 
 def get_resnum(resid: str):
@@ -174,10 +161,17 @@ def maybe_convert_condensed_ids(df: pd.DataFrame) -> bool:
     hb_states_pairs_*.csv data.
     New format: chain letter first, no underscore.
     """
-    # check previous format: with underscore
-    mskp = df["res_d"].str.contains("_") | df["res_a"].str.contains("_")
+    # old format columns:
+    convert = ("Mi" in df.columns) or ("index" in df.columns)
+    if convert:
+        return True
+    
+    # missing columns:
+    convert = ("res_d" not in df.columns) or ("sasa_grp" not in df.columns)
+    if convert:
+        return True
 
-    return bool(mskp.any())
+    return False
 
 
 def num_prec(num: Union[float, int]) -> int:
@@ -196,6 +190,7 @@ class HbCorrelator:
     def __init__(self, hbms: MSout_hb,
                  hb_kind: str = None,
                  res_of_interest: str = None,
+                 sasa_group: int = None,
                  grotthus: bool = False,
                  pairs_of_interest_fp: Union[str, Path] = None,
                  min_occ: float = MIN_OCC,
@@ -208,6 +203,11 @@ class HbCorrelator:
          - hb_kind (str, None): One of HB_KINDS=["pairs", "states"]; if None -> "pairs"
          - pairs_of_interest_fp ([str, Path], None): Obtain the correlation of a pair of 
             hb residues (comma-separated residue hb pairs).
+         - sasa_group (int, None): Filter pairs in a SASA% group:
+            1 :: both members are exposed residues;
+            2 :: one member exposed, the other surface;
+            3 :: both members are buried;
+            0 :: pairs with BK residue(s)
          - grotthus (bool, False): Filter for Grotthuss-competent residues
          - min_occ (float, MIN_OCC): To change the default used by the msout data loader
          - include_states_da_corr (bool, False): If True, the states Donors and Acceptors correlation
@@ -241,6 +241,7 @@ class HbCorrelator:
             self.min_occ_print = f"min occ >= {self.min_occ:.{self.prec}f}"
         logging.info(f"Heatmaps min_occ: {self.min_occ_print}")
 
+        self.sasa_group = sasa_group
         self.grotthus = grotthus
         self.res_oi: tuple = None
         self.res_oi = get_res_of_interest(res_of_interest, self.grotthus)
@@ -275,6 +276,7 @@ class HbCorrelator:
 
         self.pairs_df = None  # main df, ready for splitting if needed
         self.filtered = False
+        self.acc_res_fp = hbms.acc_res_fp
         # filtered with res_of_interest or pairs_of_interest_fp is given & min_occ:
         self.pairs_df = self.get_inputfile_pairs_data()
         if not self.ok:
@@ -312,7 +314,7 @@ class HbCorrelator:
         if fp1.exists() and fp2.exists():
             return fp1, fp2
         else:
-            logging.error(f"Missing file(s): At least one of the csv was not found: {fp1.name}, {fp2.name}")
+            logging.error(f"Missing file(s): At least one of the csv was not found: {fp1.name}, {fp2.name}. Forgot --reload?")
             self.ok = False
 
         return None
@@ -353,12 +355,12 @@ class HbCorrelator:
         df["with_bk"] = df.apply(
             lambda row: row["res_d"][2:4]=="BK" or row["res_a"][2:4]=="BK", axis=1)
         df_res = group_confids_into_resids(df)
+        # add sas_group:
+        acc_d = accres2dict(self.acc_res_fp)
+        df_res = add_sas_group(df_res, acc_d)
 
-        # if self.hb_kind == "states":
-        #     with open(self.input_fp2, "w") as fo:
-        #         fo.write(STATES_PAIRS_COMMENT)
-        #         df_res.to_csv(fo, index=False)
-        # else:
+        df_res["occ"] = df_res["occ"].round(PREC)
+        df_res["count"] = df_res["count"].astype("int32")
         df_res.to_csv(self.input_fp2, index=False)
         logging.info(f"Updated the format of {self.input_fp2.name}")
 
@@ -368,31 +370,18 @@ class HbCorrelator:
         """Load state_pairs or pairs_res csv and maybe update the csv format.
         """
         # must be hb_states_pairs or hb_pairs_res:
-        file_check = csv_fp.name == self.input_fp2.name
-        if not file_check:
+        if csv_fp.name != self.input_fp2.name:
             logging.error("Data file to load must be either hb_states_pairs_*.csv or hb_pairs_res_*.csv")
             self.ok = False
             return
+        logging.info(f"Loading pairs data from {csv_fp.name}...")
 
-        redo = False
         df = pd.read_csv(csv_fp, comment="#")
-
-        # previous format has underscore
+        # update to new format:
         if maybe_convert_condensed_ids(df):
-            df = self._redo_grouping_into_resid()  # & save updated file
-            return df
+            return self._redo_grouping_into_resid()  # & save updated file
 
-        # older format:
-        if "res_d" in df.columns:
-            msk_hoh = (df["res_d"].str.startswith("HOH") | df["res_a"].str.startswith("HOH"))
-            redo = msk_hoh.any()
-        else:
-            redo = True
-        redo = redo or ("Mi" in df.columns) or ("index" in df.columns)
-        if redo:
-            df = self._redo_grouping_into_resid()  # & save updated file
-            return df
-
+        logging.info(f"Loaded pairs data rows: {df.shape[0]:,}")
         return df
 
     def _filter_res_of_interest(self, resdf: pd.DataFrame) -> pd.DataFrame:
@@ -400,6 +389,7 @@ class HbCorrelator:
             return
 
         if self.res_oi:
+            logging.info("Filtering for residues of interest...")
             try:
                 if self.grotthus:
                     # no res-bk
@@ -412,9 +402,11 @@ class HbCorrelator:
                     msk = (resdf["res_d"].str[1:].str.startswith(self.res_oi) | 
                            resdf["res_a"].str[1:].str.startswith(self.res_oi))
                 if msk.any():
-                    resdf = resdf.loc[msk]
-                    logging.info(f"Residue-filtered pairs count: {resdf.shape[0]}")
-                    return resdf
+                    if self.grotthus:
+                        logging.info(f"Pairs filtered for Grotthus residues ({self.res_oi}): {msk.sum()}")
+                    else:
+                        logging.info(f"Pairs filtered for res of interest ({self.res_oi}): {msk.sum()}")
+                    return resdf.loc[msk]
                 else:
                     return None
             except Exception as e:
@@ -429,16 +421,16 @@ class HbCorrelator:
             return
 
         if self.poi_df is not None:
+            logging.info("Filtering for pairs of interest...")
             try:
                 msk = (resdf[["res_d", "res_a"]].apply(tuple, axis=1)
                         .isin(self.poi_df[["res_d", "res_a"]].apply(tuple, axis=1))
                 )
                 if msk.any():
-                    resdf = resdf.loc[msk]
-                    logging.info(f"Filtered pairs count: {resdf.shape[0]}")
-                    return resdf
+                    logging.info(f"Filtered pairs: {msk.sum()}")
+                    return resdf.loc[msk]
                 else:
-                    logging.warning(f"Found no matches for the given pairs of interest: {self.poi_df!s}")
+                    logging.warning(f"Found no matches for the pairs of interest in: {self.poi_df!s}")
                     self.ok = False
                     return None
             except Exception as e:
@@ -447,6 +439,21 @@ class HbCorrelator:
                 return None
         else:
             return resdf
+
+    def _filter_sasa_group(self, resdf:pd.DataFrame) -> pd.DataFrame:
+        if not self.ok:
+            return
+
+        if self.sasa_group is not None:
+            logging.info("Filtering for pairs in SASA% group...")
+            msk = resdf["sasa_grp"].eq(self.sasa_group) 
+            if msk.any():
+                logging.info(f"Pairs filtered for SASA% group {self.sasa_group}: {msk.sum()}")
+                return resdf.loc[msk]
+            else:
+                logging.warning(f"Found no pairs in this SASA% group: {self.sasa_group}")
+                self.ok = False
+                return None
 
     def get_inputfile_pairs_data(self) -> pd.DataFrame:
         """
@@ -458,36 +465,36 @@ class HbCorrelator:
         """
         if not self.ok:
             return
-        logging.info("Getting pairs data...")
 
         resdf = self._load_csv(self.input_fp2)
         # maybe filter:
         if self.res_oi:
-            df = self._filter_res_of_interest(resdf)
-            if df is not None:
-                resdf = df
+            resdf = self._filter_res_of_interest(resdf)
+            if resdf is not None:
                 self.filtered = True
-                if self.grotthus:
-                    logging.info(f"Data filtered for Grotthuss res of interest: {self.res_oi}")
-                else:
-                    logging.info(f"Data filtered for res of interest: {self.res_oi}")
             else:
                 self.ok = False
                 return
         
         if self.poi_df is not None:
-            df = self._filter_pairs_of_interest(resdf)
-            if df is not None:
-                resdf = df
+            resdf = self._filter_pairs_of_interest(resdf)
+            if resdf is not None:
                 self.filtered = True
-                logging.info("Data filtered for pairs of interest")
             else:
                 self.ok = False
                 return
 
+        if self.sasa_group is not None:
+            resdf = self._filter_sasa_group(resdf)
+            if resdf is not None:
+                self.filtered = True
+            else:
+                self.ok = False
+                return
+                
         # apply min occ mask if occ not default:
-        #resdf["occ"] = resdf["occ"].round(self.prec)
         if self.min_occ != MIN_OCC:
+            logging.info(f"Filtering pairs for non-default occ ({self.min_occ})...")
             occ_msk = resdf["occ"].ge(self.min_occ)
             if occ_msk.any():
                 resdf = resdf.loc[occ_msk]
@@ -870,7 +877,10 @@ class HbCorrelator:
             self.ok = False
             return
 
-        occ_msk = dfs["occ"].ge(self.min_occ)
+        if self.min_occ == MIN_OCC:
+            occ_msk = dfs["occ"].gt(self.min_occ)
+        else:
+            occ_msk = dfs["occ"].ge(self.min_occ)
         dfs = dfs.loc[occ_msk].reindex()
         self.n_matrices = dfs.shape[0]
         if not self.n_matrices:
@@ -1316,43 +1326,52 @@ class HbCorrelator:
                         }
 
         if not self.split_bk:
-            self.corr_kind = "pairs"
-            self.corr_wise = "col"
-            self.split_kind = ""
-            logging.info("Starting correlation pipeline for filtered hb states...")
-            self.run_pipeline_pairs_corr(self.pairs_df)
+            if self.pairs_df.shape[0] < 2:
+                logging.warning("Not enough rows for correlation.")
+            else:
+                self.corr_kind = "pairs"
+                self.corr_wise = "col"
+                self.split_kind = ""
+                logging.info("Starting correlation pipeline for filtered hb states...")
+                self.run_pipeline_pairs_corr(self.pairs_df)
 
-            if self.include_states_da_corr:
-                logging.info(" + Starting requested Donor & Acceptor correlation pipeline for filtered hb states...")
-                # user requested Donor or Acceptor pairs correl:
-                self.corr_kind = "da"
-                self.run_pipeline_da_corr(self.pairs_df)
+                if self.include_states_da_corr:
+                    logging.info(" + Starting requested Donor & Acceptor correlation pipeline for filtered hb states...")
+                    # user requested Donor or Acceptor pairs correl:
+                    self.corr_kind = "da"
+                    self.run_pipeline_da_corr(self.pairs_df)
         else:
             if res_pairs_df is not None:
-                logging.info("Starting correlation pipeline for res-res states pairs...")
-                self.corr_kind = "pairs"
-                self.corr_wise = "col"
-                self.split_kind = "res"
-                self.run_pipeline_pairs_corr(res_pairs_df)
+                if res_pairs_df.shape[0] < 2:
+                    logging.warning("Not enough rows for correlation.")
+                else:
+                    logging.info("Starting correlation pipeline for res-res states pairs...")
+                    self.corr_kind = "pairs"
+                    self.corr_wise = "col"
+                    self.split_kind = "res"
+                    self.run_pipeline_pairs_corr(res_pairs_df)
 
-                if self.include_states_da_corr:
-                    logging.info(" + Starting requested Donor & Acceptor correlation pipeline for res-res states pairs...")
-                    # user requested Donor or Acceptor pairs correl:
-                    self.corr_kind = "da"
-                    self.run_pipeline_da_corr(res_pairs_df)
+                    if self.include_states_da_corr:
+                        logging.info(" + Starting requested Donor & Acceptor correlation pipeline for res-res states pairs...")
+                        # user requested Donor or Acceptor pairs correl:
+                        self.corr_kind = "da"
+                        self.run_pipeline_da_corr(res_pairs_df)
 
             if bk_pairs_df is not None:
-                logging.info("Starting correlation pipeline for res-bk states pairs...")
-                self.corr_kind = "pairs"
-                self.corr_wise = "col"
-                self.split_kind = "bk"
-                self.run_pipeline_pairs_corr(bk_pairs_df)
+                if bk_pairs_df.shape[0] < 2:
+                    logging.warning("Not enough rows for correlation.")
+                else:
+                    logging.info("Starting correlation pipeline for res-bk states pairs...")
+                    self.corr_kind = "pairs"
+                    self.corr_wise = "col"
+                    self.split_kind = "bk"
+                    self.run_pipeline_pairs_corr(bk_pairs_df)
 
-                if self.include_states_da_corr:
-                    logging.info(" + Starting requested Donor & Acceptor correlation pipeline for res-bk states pairs...")
-                    # user requested Donor or Acceptor pairs correl:
-                    self.corr_kind = "da"
-                    self.run_pipeline_da_corr(bk_pairs_df)
+                    if self.include_states_da_corr:
+                        logging.info(" + Starting requested Donor & Acceptor correlation pipeline for res-bk states pairs...")
+                        # user requested Donor or Acceptor pairs correl:
+                        self.corr_kind = "da"
+                        self.run_pipeline_da_corr(bk_pairs_df)
 
         logging.info("Figure captions:\n" + pformat(self.figure_captions, sort_dicts=False, width=150) + "\n")
         logging.info("Processing of states correlation over.")

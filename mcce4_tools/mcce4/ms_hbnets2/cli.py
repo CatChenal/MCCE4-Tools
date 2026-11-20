@@ -23,6 +23,7 @@ from argparse import RawTextHelpFormatter
 from datetime import datetime
 import logging
 from pathlib import Path
+from pprint import pformat
 from typing import Union
 
 import matplotlib.pyplot as plt
@@ -87,6 +88,7 @@ def process_pairs(args: Union[dict, Namespace]):
     HbCorr = HbCorrelator(mshb,
                           hb_kind="pairs",
                           res_of_interest=args.res_of_interest,
+                          sasa_group=args.sasa_group,
                           grotthus=args.grotthus,
                           pairs_of_interest_fp=args.pairs_of_interest_csv,
                           min_occ=float(args.min_occ),
@@ -132,6 +134,7 @@ def process_states(args: Union[dict, Namespace]):
     HbCorr = HbCorrelator(mshb,
                           hb_kind="states",
                           res_of_interest=args.res_of_interest,
+                          sasa_group=args.sasa_group,
                           grotthus=args.grotthus,
                           pairs_of_interest_fp=args.pairs_of_interest_csv,
                           min_occ=float(args.min_occ),
@@ -273,6 +276,16 @@ Format example:
                     type=str,
                     default="Reds",
                     help=f"Color of the data heatmaps, one of: {AVAIL_COLORS}; Default: %(default)s"
+                    )
+    cp.add_argument("-sasa-group",
+                    type=int,
+                    default=None,
+                    help="""Filter hb pairs as per 'SASA groups'; Default: None:
+        1 :: both members are exposed residues;
+        2 :: one member is exposed, the other buried;
+        3 :: both members are buried;
+        0 :: pairs with BK residue(s)
+    """
                     )
     cp.add_argument("--grotthus",
                     action="store_true",
@@ -457,17 +470,17 @@ compute each group correlation. Always true if no pairs of interest given; Defau
 
 
 def run_header(args: Namespace) -> str:
-    opts_lines = "\n ".join(f"\t{k} = {v}" for k,v in vars(args).items())
+    opts_lines = pformat(vars(args), indent=2, sort_dicts=False)
     # py 3.10: no double-quotes within f-strings
     return (f"\n{'-' * 60}\n"
             f"Tool {APP}: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"  Options used:\n{opts_lines}\n{'-' * 60}")
+            f"Options used:\n{opts_lines}\n{'-' * 60}")
 
 
 def cli(argv=None):
     p = cli_parser()
     args = p.parse_args(argv)
-    #logging.info(run_header(args))
+    logging.info(run_header(args))
     args.func(args)
 
     return
