@@ -3,13 +3,13 @@
 """
 Module: msout_hb.py
 
-Module for MSout_hb class, the ms_hbnets2 numpy-based ms_out/ file loader for outputing
-H-bonds information from microstates using the 'hah' file', the output of the
+Module for MSout_hb class, the ms_hbnets2 ms_out file loader enabled with states sampling.
+Outputs H-bonds information from microstates using the 'hah' file', the output of the
 detect_hbonds tool.
 
 Notes:
  - Loading of H-bond data is either for 'pairs' or for 'states', reflected in the
-   ms_hbnets tool subcommands.
+   ms_hbnets2 tool subcommands.
    This split follows the msout loading routines that differ for computational efficiency.
 
 H-bonding pairs (identical to previous implementation):
@@ -17,31 +17,42 @@ H-bonding pairs (identical to previous implementation):
  It lists the occupied pairs over the entire space.
 
 H-bonding states:
- 1. To enable sampling, the msout data is saved to a numpy array if not found (on-time operation).
- 2. The default names of the output files are: hb_states_pH*_s50.csv and hb_states_pairs_pH*_s50.csv;
-    Meaning 50% of the hb states in the msout array are saved in the hb_states_pH*_s50.csv file
+ 1. Sampling is performed on the hb states dictionary loaded with the msout data with
+    a sample-pct default of 25.
+ 2. The default names of the output files are: hb_states_pH*_s25.csv and hb_states_pairs_pH*_s25.csv;
+    Meaning 25% of the randomly selected hb states in the dictionary are saved in hb_states_pH*_s25.csv.
  3. Behavior with the -sample-pct and --reload options:
    - Option 'sample-pct': the percentage of hb states to save in the hb_states_pH*_s{sample_pct}.csv file;
-   - If that file does not exist, reload is reset to True internally so that the msout array is
-     sampled for the number of hb states (len(arr)*50/100)
+   - If that file does not exist, reload is reset to True internally so that the msout data is loaded &
+     sampled for the number of hb states (len(hb_states)*pct/100)
    - If that file already exists, it is used by the correlator for any requested filtering option
      unless --reload is included, in which case, a NEW sample of that size will be generated (and
-     the previous hb_states_pH*_s50.csv file overwritten), then any requested filtering option is applied.
-   - Option 'reload': Entail loading the saved numpy array, which can be lengthy.
+     the previous hb_states_pH*_s25.csv file overwritten), then any requested filtering option is applied.
+   - Option 'reload': Entail reloading the msout file into a dictionary.
  4. The correlation on an unfiltered hb-states file will take longer (more rows to process).
  5. The information about the state space is found in the commented first line in hb_states_pH*.csv
     and hb_pairs_pH*.csv, obtained with this command:  head -n1 hb_states_pH*.csv
+ 6. Histograms of the hb states is produced when the msout file is loaded for the first time.
+    The file name follows this pattern: hbms_<pheh>_<space size>.png.
+    See example in mcce4/ms_hbnets2/hbms_pH7.00eH0.00_1500000.png.
+
+Option sasa-group: Integer categorizing the pairs by their SASA% using 0,2 as threshold.
+    1: Both residues are exposed residues
+    2: One residue is exposed, the other buried
+    3: Both residues are buried
+    0: The pair includes at least one residue backbone
 
 Examples:
 ms_hbnets2 states -ph 5                     # get hb states at a non-default pH
-ms_hbnets states2 -sample-pct 10            # return a sample of hb microstates of length 10% x n_hb_states
-ms_hbnets states2 -sample-pct 10 --reload   # get a new sample of hb microstates of length 10% x n_hb_states
-ms_hbnets states2 -figsize-data ,8          # change the data heatmap height, w=7, h=8
-ms_hbnets states2 -figsize-data ,,cm        # change the unit of the data heatmap to cm
-ms_hbnets states2 -data-cbar-min 0.3        # change the cbar lowest bound of the data heatmap
-ms_hbnets states2 -data-map-color Greens    # change the color of the data heatmap
-ms_hbnets states2 -res-of-interest DEHK+BK  # filter for these residues (keep BK)
-ms_hbnets states2 -res-of-interest DEHK+    # same as above
+ms_hbnets2 states -sample-pct 10            # return a sample of hb microstates of length 10% x n_hb_states
+ms_hbnets2 states -sample-pct 10 --reload   # get a new sample of hb microstates of length 10% x n_hb_states
+ms_hbnets2 states -figsize-data ,8          # change the data heatmap height, w=7, h=8
+ms_hbnets2 states -figsize-data ,,cm        # change the unit of the data heatmap to cm
+ms_hbnets2 states -data-cbar-min 0.3        # change the cbar lowest bound of the data heatmap
+ms_hbnets2 states -data-map-color Greens    # change the color of the data heatmap
+ms_hbnets2 states -res-of-interest DEHK+BK  # filter for these residues (keep BK)
+ms_hbnets2 states -res-of-interest DEHK+    # same as above
+ms_hbnets2 states -sasa-group 3             # Filter for pairs that are both buried
 """
 from collections import defaultdict
 from functools import partial
@@ -68,7 +79,7 @@ from mcce4.io_utils import get_mcce_filepaths, get_msout_size_info
 from mcce4.io_utils import reader_gen
 from mcce4.io_utils import show_elapsed_time
 from mcce4.io_utils import table_to_df
-from mcce4.ms_hbnets2.plotting import hbms_array_histogram
+from mcce4.ms_hbnets2.plotting import format_num, hbms_histogram
 
 
 show_elapsed = partial(show_elapsed_time, writer=logging.info)
@@ -102,7 +113,7 @@ PREC = 6
 # printed_occ = "0." + "".join('0' for i in range(PREC - 1)) + "1"
 MIN_OCC = 0  # occupied: > MIN_OCC
 # default sample_pct: % of hb states to save in array or return (w/ load_states option)
-SAMPLE_PCT = 50
+SAMPLE_PCT = 25
 
 
 # mapping of iconf (donor, acceptor) pairs for filtering purposes:
@@ -210,8 +221,14 @@ def get_hb_paths(mcce_dir: Path, ph: str = "7", eh: str = "0",
     if mcce_files is not None:
         h3_fp, step2_fp, msout_fp = mcce_files
     else:
+        logging.critical("MISSING: head3, step2_out or the msout file.")
         return None
 
+    accres_fp = mcce_dir.joinpath("acc.res")
+    if not accres_fp.exists():
+        logging.critical("MISSING: acc.res.")
+        return None
+        
     pheh = msout_fp.stem[:-2]
     # hah with msout pheh signature: reduced for that microstate;
     # use the reduced file if found:
@@ -239,6 +256,7 @@ def get_hb_paths(mcce_dir: Path, ph: str = "7", eh: str = "0",
             step2_fp,
             msout_fp,
             fort38_fp,
+            accres_fp,
             hah_fp,
             mcce_dir.joinpath(fHAH_EXPANDED.format(pheh)),
             mcce_dir.joinpath(fPAIRS.format(pheh)),
@@ -390,6 +408,19 @@ def check_pairs(hah_da_pairs, pairs_csv) -> bool:
 def do_checks(mcce_dir: str, ph: str = "7", eh: str = "0",
               sample_pct: int = SAMPLE_PCT) -> bool:
     """Wrapper to perform check on ms_hbnets main output files.
+    Uses get_hb_paths, which returns:
+           (h3_fp,
+            step2_fp,
+            msout_fp,
+            fort38_fp,
+            accres_fp,
+            hah_fp,
+            mcce_dir.joinpath(fHAH_EXPANDED.format(pheh)),
+            mcce_dir.joinpath(fPAIRS.format(pheh)),
+            mcce_dir.joinpath(fPAIRS_RES.format(pheh)),
+            mcce_dir.joinpath(fSTATES.format(pheh, sample_pct)),
+            mcce_dir.joinpath(fSTATES_RES.format(pheh, sample_pct)),
+            )
     """
     run_dir = Path(mcce_dir)
     logging.info("Running checks...")
@@ -398,7 +429,7 @@ def do_checks(mcce_dir: str, ph: str = "7", eh: str = "0",
     if needed_fps is None:
         return False
 
-    _,_,_,_, hah_fp, _, pairs_csv,_, states_csv, _ = needed_fps
+    _,_,_,_,_, hah_fp, _, pairs_csv,_, states_csv, _ = needed_fps
 
     hah_da_pairs = get_da_pairs(hah_fp)
     if hah_da_pairs is None:
@@ -419,6 +450,59 @@ def do_checks(mcce_dir: str, ph: str = "7", eh: str = "0",
             return False
 
     return True
+
+
+def accres2dict(acc_fp: Path) -> dict:
+    """Load acc.res file into a dict; 
+    Add a 'sas group' column ('grp', int) to indicate that the
+    residue is exposed=1 or buried=2 using the conventional
+    threshold of 0.2 angstroms.
+    """
+    d_out = defaultdict(int)
+    with open(acc_fp) as fh:
+        for line in fh:
+            if line.startswith(("NTR", "CTR")):
+                continue
+
+            try:
+                _, res, resnum, _, sas = line.split()
+            except ValueError:
+                continue
+            
+            chn = resnum[0]
+            if chn == "_":
+                chn = "X"
+            res1 = res3_to_res1.get(res, res)
+            if res1 == "HOH":
+                res1 = "w"
+
+            d_out[f"{chn}{res1}{int(resnum[1:])}"] = 1 if float(sas) >=0.2 else 2
+
+    return d_out
+
+
+def add_sas_group(respairs_df: pd.DataFrame, acc_d: dict) -> pd.DataFrame:
+    sasa_grp_map = {(1, 1): 1,  # surface-surface,
+                    (1, 2): 2,  # surface-buried, 
+                    (2, 1): 2,  # buried-surface, 
+                    (2, 2): 3,  # buried_buried
+                    (0, 0): 0,  # pairs with BK
+                    (1, 0): 0,  # pairs with BK
+                    (0, 1): 0,  # pairs with BK
+                    (2, 0): 0,  # pairs with BK
+                    (0, 2): 0,  # pairs with BK
+                    }
+    
+    def get_sas_group(tpl) -> int:
+        return sasa_grp_map.get((acc_d.get(tpl[0], 0),
+                                 acc_d.get(tpl[1], 0)), 0)
+    
+    respairs_df["sasa_grp"] = (respairs_df[["res_d","res_a"]]
+                                        .apply(tuple, axis=1)
+                                        .apply(get_sas_group)
+                                )
+
+    return respairs_df
 
 
 class ConfInfo:
@@ -616,11 +700,11 @@ class MSout_hb:
         # the hb_pairs output file is never sampled as it is an aggregation of all hb pairs
         # over all microstates.
         self.reload = reload
-        self.sample_pct = int(sample_pct)
-        if self.reload and self.load_states:    # validate pct:
+        self.sample_pct = int(sample_pct) 
+        if self.load_states:    # validate pct:
             if not 0 < self.sample_pct <= 100:
-                logging.warning(f"Invalid sample_pct: {self.sample_pct}. Must be in (0, 100]. Reset to 100.")
-                self.sample_pct = 100
+                logging.warning(f"INVALID sample-pct: {self.sample_pct}. Must be in (0, 100]. Reset to default ({SAMPLE_PCT}).")
+                self.sample_pct = SAMPLE_PCT
         
         self.run_dir = Path(mcce_dir).resolve()
         self.msinfo_dict: dict = None
@@ -631,7 +715,8 @@ class MSout_hb:
             self.proceed = False
             return
 
-        (self.h3_fp, self.step2_fp, self.msout_fp, self.fort38_fp,
+        (self.h3_fp, self.step2_fp, self.msout_fp, 
+         self.fort38_fp, self.acc_res_fp,
          self.hah_fp,
          # outputs:
          self.hah_ms_fp,
@@ -699,20 +784,6 @@ class MSout_hb:
         self.hb_adj_indices: np.ndarray = None
         self.hb_adj_indptr: np.ndarray = None
         self.P: np.ndarray  = None  # dense pairs matrix
-
-        if self.load_states:
-            # get the saved hbms array file path; 
-            # it is used to save the hbms data as a numpy array;
-            # Name format: hbms_pH7.0_Eh0.0_100000.npy
-            arr_fps = list(self.run_dir.glob(f"hbms_{self.pheh_str}_*.npy"))
-            if arr_fps:
-                if len(arr_fps) > 1:
-                    logging.warning("There should not be multiple .py files at a given pH/Eh! Using the fist one.")
-                self.hbms_array_fp = arr_fps[0]
-                self.n_space = int(self.hbms_array_fp.stem.rsplit("_", maxsplit=1)[1])
-            else:  # not found
-                logging.info("Saving msout H-bonding data as array file (one-time operation)...")
-                self._save_hb_states()
 
         self.setup_time = show_elapsed_time(start_setup, info="MS setup", return_time=True)
 
@@ -1121,105 +1192,6 @@ class MSout_hb:
                                )
         return
 
-    def _save_hb_states(self):
-        """Process the 'msout file' for H-bond microstates and save to .npy
-        Output row format in save array: [count, int(tot E), ms_pairs_iconfs],
-        where ms_pairs_iconfs is a flattened list of the iconf pairs in the microstate.
-        One hb ms per row, with the count of microstates and total energy for that state.
-        """
-        logging.info("Saving H-bond states to .npy file...")
-        self.I = self.get_sparse_matrix()
-        
-        found_mc = False
-        newmc = False
-        # k: (Mi, Mj); v: [ count, int(E)]
-        hb_states =  defaultdict(lambda: [0, 0])
-        # => msvec to be reconstructed from Mi,Mj
-        mc_lines = 0
-        self.n_hb_space = 0
-
-        msout_data = reader_gen(self.msout_fp)
-        for lx, line in enumerate(msout_data, start=1):
-            if lx <= N_HDR:
-                continue
-            line = line.strip()
-            if not line or line[0] == "#":
-                continue
-            else:
-                # find the next MC record
-                if line.startswith("MC:"):
-                    found_mc = True
-                    newmc = True
-                    continue
-
-                if newmc:
-                    # line with candidate state for MC sampling, e.g.:
-                    # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free residues in state
-                    current_state = [int(i) for i in line.split(":")[1].split()]
-                    if self.extended_iconfs:
-                        xs = np.array(current_state + self.extended_iconfs, dtype=np.uint32)
-                    else:
-                        xs = np.array(current_state, dtype=np.uint32)
-                    newmc = False
-                    continue
-
-                if found_mc:
-                    fields = line.split(",")
-                    if len(fields) < 3:
-                        continue
-
-                    mc_lines += 1
-                    count = int(fields[1])
-                    # flipped: 
-                    for ic in [int(c) for c in fields[2].split()]:
-                        xs[self.HDR.iconf2ires[ic]] = ic
-          
-                    si, sj = self.I[np.ix_(xs, xs)].nonzero()
-                    sij = tuple(zip(xs[si], xs[sj]))
-                    # k: ((Mi, Mj),); v: [ count, int(E) ]
-                    hb_states[sij][0] += count
-                    hb_states[sij][1] += int(float(fields[0])) * count   # state energy
-
-                    if mc_lines % 50_000 == 0:
-                        logging.info(f" Trace - mc lines processed: {mc_lines:,}...")
-
-        # accepted ms with flipped iconfs
-        logging.info(f"Processed mc lines: {mc_lines:,}")
-
-        # build output np array from dict:
-        data = []
-        ms_sizes = set()
-        for key in hb_states:
-            ms_sizes.add(len(key))
-            ms_lst = []
-            ms_lst.extend([int(v) for v in hb_states[key]])  # [count, int(tot E)]
-            ms_lst.extend([int(t) 
-                           for tpl in key
-                           for t in list(tpl)])
-            data.append(ms_lst)  # [count, int(tot E), ms_pairs_iconfs]
-        del hb_states
-
-        if not len(data):
-            logging.warning(f"No occupied hb states found.")
-            self.proceed = False
-            return
-
-        # resize data to max ms size, np requirement
-        max_ms_size = max(ms_sizes) * 2
-        for row in data:
-            row.extend([-1] * (max_ms_size - (len(row) - 2)))
-
-        arr = np.array(data, dtype=np.int32)
-        del data
-        # size of the returned hb ms space:
-        self.n_hb_space = int(arr[:,0].sum())
-        self.n_space = self.n_hb_space
-        # save arr:
-        self.hbms_array_fp = self.run_dir.joinpath(f"hbms_{self.pheh_str}_{self.n_space}.npy")
-        np.save(self.hbms_array_fp, arr)
-
-        return
-
     def load_hb_pairs(self):
         """Process the 'msout file' for H-bonding pairs.
         Populate hb_pairs dict with the pair as index and [count, occ] as value.
@@ -1273,7 +1245,7 @@ class MSout_hb:
 
                     self.process_ms_pairs(xs, count)  # update pair matrix, self.P
 
-                    if mc_lines % 50_000 == 0:
+                    if mc_lines % self.n_skip == 0:
                         logging.info(f" Trace: processed mc lines {mc_lines:,}...")
 
         # accepted ms with flipped iconfs
@@ -1299,102 +1271,10 @@ class MSout_hb:
                                        self.P[p[0], p[1]].sum(axis=0)/self.n_space
                                        ])
         self.n_hb_space = max(self.hb_pairs, key=itemgetter(1))[1]
+        logging.info(f"Full msout pairs list size: {format_num(sys.getsizeof(self.hb_pairs))}")
 
         return
 
-    def load_hbms_array(self):
-        """Load H-bond microstates data from .npy file."""
-        if not self.load_states:
-            logging.error("Wrong call to load_hbms_array for pairs. Returning None")
-            return
-
-        if self.hbms_array_fp.exists():
-            logging.info("Using existing H-bond microstates array.")
-        else:
-            self._save_hb_states()
-        hbms_array_histogram(self.hbms_array_fp, self.hbms_array_fp.with_suffix(".png"))
-
-        self.hbms_array = np.load(self.hbms_array_fp, mmap_mode="r")
-        self.n_hb_states = len(self.hbms_array)
-        self.n_hb_space = self.hbms_array[:,0].sum()
-        logging.info(f"Loaded array - hb states: {self.n_hb_states:,}; hb space: {self.n_hb_space:,}")
-        return
-
-    def sample_hbms_array(self):
-        """Sample the hbms array to return sample_pct% of the n_hb_states.
-        """
-        if self.hbms_array is None:
-            self.load_hbms_array()
-
-        if self.sample_pct == SAMPLE_PCT and not self.reload:
-            return
-
-        rng = np.random.default_rng()
-        # sample without replacement:
-        n_samples = int(self.n_hb_states * self.sample_pct / 100)
-        #msi = rng.choice(self.n_hb_states, size=n_samples, replace=False, shuffle=False)
-        self.hbms_array = self.hbms_array[rng.choice(self.n_hb_states,
-                                                     size=n_samples,
-                                                     replace=False,
-                                                     shuffle=False)]
-        self.n_hb_states = self.hbms_array.shape[0]
-        self.n_hb_space = self.hbms_array[:,0].sum()
-        logging.info(f"Sampled {self.sample_pct}% of hbms array = {self.n_hb_states:,} states.")
-
-        return
-
-    def get_hb_data(self):
-        """Load the hbms array and populate the data structure needed 
-        for the data2csv functions.
-        
-        hbms_array is a numpy array where each row represents a H-bonding
-        microstate, with the first two columns being count and energy, and the subsequent
-        columns being pairs of indices representing hydrogen bond pairs.
-        """
-        if not self.load_states:
-            logging.error("Call to get_hb_data for pairs. Returning None")
-            return None
-
-        if self.hbms_array is None:
-            self.load_hbms_array()
-
-        # if self.load_states:
-        self.hb_states = {}
-        # populate self.hb_states from hbms_array, which may be sampled
-        averE = np.round(self.hbms_array[:, 1] / self.n_space, 2)  #self.n_hb_space
-        count = self.hbms_array[:, 0]
-        occ = np.round(count / self.n_space, PREC)  #self.n_hb_space
-
-        for i in range(self.hbms_array.shape[0]):
-            pairs = []
-            for j in range(2, self.hbms_array.shape[1], 2):
-                if self.hbms_array[i, j] == -1:
-                    break
-                pairs.append((self.hbms_array[i, j], self.hbms_array[i, j + 1]))
-            self.hb_states[tuple(pairs)] = [averE[i], count[i], occ[i]]
-
-        self.n_hb_states = len(self.hb_states)
-        logging.info(f"Found {self.n_hb_states:,} occupied hb states in the hbms array.")
-        # else:
-        #     self.hb_pairs = []
-        #     # return [(Mi, Mj), count, occ] where Mi, Mj are the conformer indices
-        #     # of the unique hb pairs in the hbms_array
-        #     hb_pairs =  defaultdict(int)
-        #     count = self.hbms_array[:, 0]
-        #     for i in range(self.hbms_array.shape[0]):
-        #         for j in range(2, self.hbms_array.shape[1], 2):
-        #             if self.hbms_array[i, j] == -1:
-        #                 break
-        #             tpl = (self.hbms_array[i, j], self.hbms_array[i, j + 1])
-        #             hb_pairs[tpl] += count[i]
-    
-        #     # transform hb_pairs dict to list for hb_pairs_data2csv:
-        #     self.hb_pairs = [[k, v, v/self.n_space] for k, v in hb_pairs.items()]
-        #     self.n_hb_pairs = len(self.hb_pairs)
-        #     logging.info(f"Found {self.n_hb_pairs:,} occupied hb pairs in the hbms array.")
-
-        return
-    
     def hb_pairs_data2csv(self):
         if self.hb_pairs:
             df = pd.DataFrame(self.hb_pairs, columns=["index","count","occ"])
@@ -1424,8 +1304,11 @@ class MSout_hb:
                 lambda row: row["donor"][3:5]=="BK" or row["acceptor"][3:5]=="BK",
                 axis=1)
             
-            # # collapse confs to resid with res occ = sum of confs occ:
+            # collapse confs to resid with res occ = sum of confs occ:
             df_res = group_confids_into_resids(df)
+            # add sas_group:
+            acc_d = accres2dict(self.acc_res_fp)
+            df_res = add_sas_group(df_res, acc_d)
             df_res.to_csv(self.pairs_res_csv, index=False)
 
             # save new cols to expanded files
@@ -1443,6 +1326,100 @@ class MSout_hb:
 
         return
 
+    def load_hb_states(self):
+        """Process the 'msout file' for H-bond microstates and populate hb_states dict.
+        The dict is then sample according to sample_pct.
+        """
+        logging.info(f"Loading H-bond states to return {self.sample_pct}%...")
+        
+        found_mc = False
+        newmc = False
+        # k: (Mi, Mj); v: [ int(E), count ]
+        hb_states =  defaultdict(lambda: [0, 0])
+        # => msvec to be reconstructed from Mi,Mj
+        mc_lines = 0
+        self.n_space = 0
+        self.n_hb_space = 0
+
+        msout_data = reader_gen(self.msout_fp)
+        for lx, line in enumerate(msout_data, start=1):
+            if lx <= N_HDR:
+                continue
+            line = line.strip()
+            if not line or line[0] == "#":
+                continue
+            else:
+                # find the next MC record
+                if line.startswith("MC:"):
+                    found_mc = True
+                    newmc = True
+                    continue
+
+                if newmc:
+                    # line with candidate state for MC sampling, e.g.:
+                    # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free residues in state
+                    current_state = [int(i) for i in line.split(":")[1].split()]
+                    if self.extended_iconfs:
+                        # uint16 range: (0, 32,767)
+                        xs = np.array(current_state + self.extended_iconfs, dtype=np.uint16)
+                    else:
+                        xs = np.array(current_state, dtype=np.uint16)
+                    newmc = False
+                    continue
+
+                if found_mc:
+                    fields = line.split(",")
+                    if len(fields) < 3:
+                        continue
+
+                    mc_lines += 1
+                    count = int(fields[1])
+                    self.n_space += count
+
+                    # flipped: 
+                    for ic in [int(c) for c in fields[2].split()]:
+                        xs[self.HDR.iconf2ires[ic]] = ic
+          
+                    si, sj = self.I[np.ix_(xs, xs)].nonzero()
+                    sij = tuple(zip(xs[si], xs[sj]))
+                    # k: ((Mi, Mj),); v: [ int(E), count]
+                    hb_states[sij][0] += int(float(fields[0])) * count   # state energy
+                    hb_states[sij][1] += count
+
+                    if mc_lines % self.n_skip == 0:
+                        logging.info(f" Trace - mc lines processed: {mc_lines:,}...")
+
+        # accepted ms with flipped iconfs
+        logging.info(f"Processed mc lines: {mc_lines:,}")
+        logging.info(f"Full msout dict size: {format_num(sys.getsizeof(hb_states))}")
+
+        self.hbms_hist_png = self.run_dir.joinpath(f"hbms_{self.pheh_str}_{self.n_space}.png")
+        if not self.hbms_hist_png.exists():
+            hbms_histogram(hb_states, self.hbms_hist_png)
+
+        rng = np.random.default_rng()
+        # sample without replacement:
+        n_hb_states = len(hb_states)
+        n_samples = int(n_hb_states * self.sample_pct / 100)
+        msi = rng.choice(n_hb_states, size=n_samples, replace=False, shuffle=False)
+
+        # populate final states dict with aver E, count & occ:
+        self.hb_states = defaultdict(lambda: [0., 0, 0.])   # [averE, count, occ]
+        for kx, key in enumerate(hb_states):
+            if kx in msi:
+                # size of the returned hb states space:
+                self.n_hb_space += hb_states[key][1]
+                self.hb_states[key][0] = hb_states[key][0]/self.n_space
+                self.hb_states[key][1] = hb_states[key][1]
+                self.hb_states[key][2] = hb_states[key][1]/self.n_space
+        del hb_states
+        self.hb_states = dict(self.hb_states)
+        self.n_hb_states = len(self.hb_states)
+        if not self.n_hb_states:
+            logging.warning(f"No occupied hb states found.")
+
+        return
+
     def hb_states_data2csv(self):
         """
         Outputs hb states data into two csv files:
@@ -1455,7 +1432,9 @@ class MSout_hb:
                                          columns=["averE", "count", "occ"]
                                          ).reset_index()
             dfs["averE"] = dfs["averE"].round(2)
+            dfs["count"] = dfs["count"].astype("float32")
             dfs["occ"] = dfs["occ"].round(PREC)
+            dfs["count"] = dfs["count"].astype("int32")
             dfs["state_id"] = None
 
             # get the unique hb pairs in all the returned hb microstates:
@@ -1540,7 +1519,7 @@ class MSout_hb:
         if self.n_space:
             txt = txt + f"({self.n_hb_space/self.n_space:.1%} of state space)\n"
         if self.load_states:       
-            txt = txt + f"Saved occupied H-bonding states: {self.n_hb_states:,}\n"
+            txt = txt + f"Returned occupied H-bonding states: {self.n_hb_states:,}\n"
         else:
             txt = txt + f"Occupied H-bonding pairs: {self.n_hb_pairs:,}\n"
 
@@ -1552,6 +1531,7 @@ class MSout_hb:
         if self.load_states:
             miss = not (self.states_csv.exists() and self.states_pairs_csv.exists())
             if miss:
+                self.hah_ms_fp,
                 self.states_csv.unlink(missing_ok=True)
                 self.states_pairs_csv.unlink(missing_ok=True)
             return miss
@@ -1564,6 +1544,7 @@ class MSout_hb:
             self.hah_ms_fp.unlink(missing_ok=True)
             self.pairs_csv.unlink(missing_ok=True)
             self.pairs_res_csv.unlink(missing_ok=True)
+        return miss
 
     def run_ms_pipeline(self, load_states: bool = False):
         """
@@ -1577,28 +1558,24 @@ class MSout_hb:
         self.load_states = load_states
         self.hb_kind = "states" if self.load_states else "pairs"
 
-        if self.load_states:
-            # check if histogram was saved
-            if self.hbms_array_fp.exists():
-                hist_png = self.hbms_array_fp.with_suffix(".png")
-                if not hist_png.exists():
-                    hbms_array_histogram(self.hbms_array_fp, hist_png)
-
-        if not (self.reload or self.missing_files):
+        if not self.reload and not self.missing_files:
             return
 
         if self.missing_files:
-            # reset reload flag: used by correlatory to print info 
-            # not already printed by the loaded
             self.reload = True
+
+        if not self.reload:
+            return
+
         start_pipeline = time()
         self.mc_lines, _, self.n_MC = get_msout_size_info(self.msout_fp)
+        self.n_skip = self.mc_lines//6  # limit the trace lines to 6
         logging.info(f"Approximate number of lines in msout file: {self.mc_lines:,}")
 
         if self.load_states:
             start_t = time()
-            self.sample_hbms_array()
-            self.get_hb_data()
+            self.I = self.get_sparse_matrix()
+            self.load_hb_states()
             logging.info(self.__str__())
             logging.info(show_elapsed(start_t, info="Loading H-bonding states"))
             if self.n_hb_states:

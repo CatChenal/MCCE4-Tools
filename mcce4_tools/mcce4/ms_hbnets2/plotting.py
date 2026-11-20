@@ -8,7 +8,7 @@ Codebase: mcce4/ms_hbnets/plotting.py
 import logging
 from pathlib import Path
 from re import search
-from typing import List
+from typing import List, Union
 
 import matplotlib as mpl
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -24,23 +24,76 @@ COLOR_GRADIENTS = ['Blues','Greens','Greys','Oranges','Purples','Reds']
 AVAIL_COLORS = ", ".join(c for c in COLOR_GRADIENTS)
 
 
-def hbms_array_histogram(hb_array_fp: Path, save_fp: Path, redo: bool = False):
+def format_num(num):
+    """Return condensed format for plots, up to millions.
+    """
+    G = 1_000_000_000
+    M = 1_000_000
+    K = 1_000
+    if num > G:
+        return f"{num/G:.4g}G"
+    if num > M:
+        return f"{num/M:.4g}M"
+    elif num > K:
+        return f"{num/K:.4g}K"
+    return num
+
+
+def hbms_histogram(hb_states: Union[dict|list], save_fp: Path, redo: bool = False):
     if save_fp.exists() and not redo:
-        print("Histogram of hbms data already saved:", save_fp.name)
+        logging.info("Histograms of hbms already saved:", save_fp.name)
         return
-    hb_array_fp = Path(hb_array_fp)
-    hb_arr = np.load(hb_array_fp, mmap_mode='r')
-    x = hb_arr[:,0]
-    _, ax = plt.subplots(1,1, figsize=(4,4), layout='constrained')
-    _ = ax.hist(x, bins='auto', histtype='step', lw=1.5, cumulative=True, label="cummulative");
-    _ = ax.hist(x, bins='auto', histtype='step', lw=1.5, cumulative=False, label="hist");
-    ax.plot([max(x)], [x.shape[0]], 'o', label=f"max count={max(x)}\nstates={x.shape[0]:,}")
-    ax.set_title(f"{hb_array_fp.parent.name} - H-bonding ms array\n({hb_array_fp.name})", fontsize=10)
-    ax.yaxis.set_major_formatter(ticker.EngFormatter(unit='', places=0));
-    ax.set(xlabel="hb state count", ylabel="hb states");
-    ax.legend(loc='best')
+    if not hb_states:
+        logging.warning("Empty hb_states input. No histograms created.")
+        return
+
+    # retrieve count field from either dict or list:
+    if isinstance(hb_states, dict):
+        x = np.array([hb_states[k][1] for k in hb_states], dtype=np.uint32)
+    elif isinstance(hb_states, list):
+        # hb_pairs :: [[(mi, mj), count, occ], ]
+        x = np.array([pair[1] for pair in hb_states], dtype=np.uint32)
+    else:
+        logging.warning("TypeError: hbms_histogram accepts a dict or a list. No histograms created.")
+        return
+
+    space = int(save_fp.stem.rsplit("_", maxsplit=1)[1])
+    cum_sum_cnt = x.cumsum(axis=0)
+    sample_pcts = []
+    ys = []
+    pcts = [n/100 for n in range(20,110,10)]
+    for pct in pcts:
+        # number of hb states to reach pct% of space:
+        y = cum_sum_cnt[cum_sum_cnt <= space*pct].shape[0]
+        ys.append(y)
+        # sample-pct to reach pct% of space:
+        sample_pcts.append(round(100*y/space))
+
+    s = len(str(max(ys)))
+    s = s + s//3
+    legend_lbl = "\n".join(f"{pct: >2d}: {y: >{s},}" for pct, y in zip(sample_pcts, ys))
+
+    _, axs = plt.subplots(1,2, figsize=(6,3), layout='constrained')
+
+    _ = axs[0].hist(x, bins='auto', histtype='step', lw=1.5, cumulative=True, label="cummulative");
+    _ = axs[0].hist(x, bins='auto', histtype='step', lw=1.5, cumulative=False, label="hist");
+    axs[0].plot([max(x)], [x.shape[0]], 'o', label=f"max count={max(x)}\nstates={x.shape[0]:,}")
+    axs[0].set_title(f"{save_fp.parent.name} - H-bonding States Histograms\nSpace = {format_num(space)}",
+                     fontsize=10)
+    axs[0].yaxis.set_major_formatter(ticker.EngFormatter(unit='', places=0));
+    axs[0].set(xlabel="hb state count", ylabel="hb states");
+    axs[0].legend(loc='best')
+
+    axs[1].plot(sample_pcts, pcts, "o", ms=3, label=legend_lbl)
+    axs[1].grid()
+    axs[1].legend(title="States returned", title_fontsize=8, fontsize=8, loc='best')
+    axs[1].set_title("Sample pct to % space", fontsize=10)
+    axs[1].set_yticks(pcts)
+    axs[1].set_xticks(sample_pcts)
+    axs[1].set(xlabel="sample-pct")
+
     plt.savefig(save_fp, dpi=200, bbox_inches="tight")
-    logging.info(f"H-bonding ms array histogram saved to: {save_fp.name}.")
+    logging.info(f"H-bonding histograms saved to: {save_fp.name}.")
 
     return
 
