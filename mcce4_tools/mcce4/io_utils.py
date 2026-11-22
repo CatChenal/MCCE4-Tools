@@ -37,6 +37,7 @@ Provides these helper functions:
  * class MsgFmt: Callable class to preclude eager execution of f-strings in logging.
 """
 from itertools import islice
+import json
 import logging
 from pathlib import Path
 import pickle
@@ -142,6 +143,18 @@ class MsoutHeaderData:
         self.n_free_ics = len(self.free_iconfs)
 
         return
+
+
+def dict_to_json(d: dict, json_fp: Path):
+    """Save input dict to json file"""
+    json_fp.write_text(json.dumps(d))
+
+
+def load_json(json_fp: Path) -> dict:
+    if json_fp.exists():
+        return json.loads(json_fp.read_text())
+    print(f"Not found: {json_fp!s}. Empty dict returned")
+    return {}
 
 
 def get_msout_size_info(msout_fp: Path,

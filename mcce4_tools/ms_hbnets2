@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+
+"""
+Tool: ms_hbnets2
+
+Testing new implementation with saved hb ms array.
+
+Description:
+Gather the H-bonding conformer pairs and states occupancies 
+from the microstates file given a mcce dir, pH & Eh.
+
+Note: If the '_hah.txt' file is not found (or has the previous
+      format), detect_hbonds will be run.
+
+The 'hb_states' file is mcce_dir/hb_states.csv
+The 'hb pairs' file is mcce_dir/hb_pairs.csv
+The extended hah file is expanded_hah_pH7eH0.tsv (for example)
+"""
+import sys
+
+from mcce4.ms_hbnets2.cli import cli
+
+
+if __name__ == "__main__":
+    sys.exit(cli())
