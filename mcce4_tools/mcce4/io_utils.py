@@ -145,16 +145,23 @@ class MsoutHeaderData:
         return
 
 
-def dict_to_json(d: dict, json_fp: Path):
-    """Save input dict to json file"""
-    json_fp.write_text(json.dumps(d))
+def get_msout_line_counts(msout_fp: Path) -> dict:
+    
+    cmd = f"grep -n '^MC' {str(msout_fp)}; wc -l {str(msout_fp)}"
+    out = subprocess_run(cmd)
+    if out.returncode:  # not 0 => failed
+        print("Could not get line counts from msout file")
+        return None
 
+    mc_lines = {}
+    lines = out.stdout.splitlines()
+    n_lines = int(lines[-1].split()[0])
+    for line in lines[:-1]:
+        count, _, mc = line.split(":")
+        mc_lines[int(mc)] = int(count)
+    mc_lines.update({len(lines)-1: n_lines})
 
-def load_json(json_fp: Path) -> dict:
-    if json_fp.exists():
-        return json.loads(json_fp.read_text())
-    print(f"Not found: {json_fp!s}. Empty dict returned")
-    return {}
+    return mc_lines
 
 
 def get_msout_size_info(msout_fp: Path,
@@ -180,6 +187,18 @@ def get_msout_size_info(msout_fp: Path,
         print(f"The msout file {msout_fp!s} has {n_mc_runs} MC runs")
 
     return n_lines, n_skip_lines, n_mc_runs
+
+
+def dict_to_json(d: dict, json_fp: Path):
+    """Save input dict to json file"""
+    json_fp.write_text(json.dumps(d))
+
+
+def load_json(json_fp: Path) -> dict:
+    if json_fp.exists():
+        return json.loads(json_fp.read_text())
+    print(f"Not found: {json_fp!s}. Empty dict returned")
+    return {}
 
 
 def check_pkout(pka_file: Union[str, Path]) -> bool:
