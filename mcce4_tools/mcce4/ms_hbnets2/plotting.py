@@ -39,7 +39,7 @@ def format_num(num):
     return num
 
 
-def hbms_histogram(hb_states: Union[dict|list], save_fp: Path, redo: bool = False):
+def hbms_histogram(hb_states: Union[dict|list], save_fp: Path, mc_runs: int = 0, redo: bool = False):
     if save_fp.exists() and not redo:
         logging.info("Histograms of hbms already saved:", save_fp.name)
         return
@@ -78,8 +78,14 @@ def hbms_histogram(hb_states: Union[dict|list], save_fp: Path, redo: bool = Fals
     _ = axs[0].hist(x, bins='auto', histtype='step', lw=1.5, cumulative=True, label="cummulative");
     _ = axs[0].hist(x, bins='auto', histtype='step', lw=1.5, cumulative=False, label="hist");
     axs[0].plot([max(x)], [x.shape[0]], 'o', label=f"max count={max(x)}\nstates={x.shape[0]:,}")
-    axs[0].set_title(f"{save_fp.parent.name} - H-bonding States Histograms\nSpace = {format_num(space)}",
-                     fontsize=10)
+
+    title = f"{save_fp.parent.name} - H-bonding States Histograms\nSpace = {format_num(space)}"
+    if mc_runs:
+        if mc_runs > 1:
+            title += f" ({mc_runs} MC runs)"
+        else:
+            title += " (1 MC run)"
+    axs[0].set_title(title, fontsize=10)
     axs[0].yaxis.set_major_formatter(ticker.EngFormatter(unit='', places=0));
     axs[0].set(xlabel="hb state count", ylabel="hb states");
     axs[0].legend(loc='best')

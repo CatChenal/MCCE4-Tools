@@ -75,7 +75,7 @@ except ImportError as e:
 
 from mcce4.constants import res3_to_res1
 from mcce4.io_utils import MsoutHeaderData, N_HDR
-from mcce4.io_utils import get_mcce_filepaths, get_msout_size_info
+from mcce4.io_utils import get_mcce_filepaths, get_msout_line_counts, get_msout_size_info
 from mcce4.io_utils import reader_gen
 from mcce4.io_utils import show_elapsed_time
 from mcce4.io_utils import table_to_df
@@ -106,6 +106,10 @@ fPAIRS_RES = "hb_pairs_res_{}.csv"
 fSTATES = "hb_states_{}_s{}.csv"
 fSTATES_RES = "hb_states_pairs_{}_s{}.csv"
 
+
+MC_RUNS = 6  # default number of Monte Carlo runs in the msout file
+MC_RUNS_LARGE_FILE = 1  # for msout file with over 3M lines
+LARGE_FILE = 3_000_000  # lines in msout file
 
 # the occ returned in the csv files are rounded to this precision:
 PREC = 6
@@ -672,6 +676,7 @@ class MSout_hb:
     """Class to process the 'msout file' for occupied H-bonds data.
     """
     def __init__(self, mcce_dir: str, ph: str = "7", eh: str = "0",
+                 mc_range: list = None,
                  sample_pct: int = SAMPLE_PCT,
                  load_states: bool = False,
                  reload: bool = False,
@@ -684,6 +689,7 @@ class MSout_hb:
          - mcce_dir (str): Path to a mcce simulation directory.
          - ph (str, '7'): Titration pH.
          - eh (str, '0'): Titration Eh.
+         - mc_range (list, None): Validated list of MC run(s) to return, individual or range.
          - sample_pct (int, 100): To return a hbms sample of size: sample_pct% * n_hb_states.
          - load_states (bool, False): Must be True to load hb states instead of hb pairs.
            When True, the output file 'hb_states_pairs_{pheh}.csv' has the hb pair state
@@ -695,6 +701,11 @@ class MSout_hb:
         self.proceed = True
         self.verbose = verbose
         self.load_states = load_states
+        self.mc_range = mc_range
+        self.split_mc = self.mc_range is not None
+        if self.split_mc:
+            logging.info(f"Selected MC run(s) to load: {self.mc_range}.")
+
         self.hb_kind = "states" if self.load_states else "pairs"
         # reload is for recreating the hb_states output files (when new sample_pct is given);
         # the hb_pairs output file is never sampled as it is an aggregation of all hb pairs
@@ -748,6 +759,18 @@ class MSout_hb:
             self.proceed = False
             return
 
+        self.mc_lines = get_msout_line_counts(self.msout_fp)
+        self.tot_lines_key = max(self.mc_lines)
+        if self.load_states:
+            if not self.split_mc:
+                # check msout file total lines & maybe set mc_range
+                if self.mc_lines[self.tot_lines_key] >= LARGE_FILE:
+                    self.mc_range = [MC_RUNS_LARGE_FILE]
+                    self.split_mc = True
+                    logging.warning(f"Lines in msout >= 3M: Only MC run {MC_RUNS_LARGE_FILE} will be loaded.")
+
+        self.start_mc_line, self.stop_mc_line = self.get_selected_mc_range()
+
         # attributes populated by get_extended_iconfs:
         self.n_fx: int = 0
         self.fx_iconfs: List[int] = []
@@ -793,6 +816,17 @@ class MSout_hb:
             self.missing_files = self.missing_outputs()
 
         return
+
+    def get_selected_mc_range(self) -> tuple:
+        """Return the range (start_line, stop_line) per validated mc_range.
+        """
+        if self.split_mc:
+            if len(self.mc_range) == 1:  # single value
+                return self.mc_lines[self.mc_range[0]-1], self.mc_lines[self.mc_range[0]]
+
+            return self.mc_lines[self.mc_range[0]-1], self.mc_lines[self.mc_range[1]]
+        else:
+            return self.mc_lines[0], self.mc_lines[self.tot_lines_key]
 
     def reduce_hah_file(self, df: pd.DataFrame) -> Union[pd.DataFrame, None]:
         """Reduce the inital hah.txt file by removing entries that have:
@@ -1214,9 +1248,18 @@ class MSout_hb:
             else:
                 # find the next MC record
                 if line.startswith("MC:"):
-                    found_mc = True
-                    newmc = True
-                    continue
+                    if not self.split_mc:
+                        found_mc = True
+                        newmc = True
+                        continue
+                    else:
+                        if self.start_mc_line <= lx < self.stop_mc_line + 1:
+                            found_mc = True
+                            newmc = True
+                        else:
+                            found_mc = False
+                            newmc = False
+                        continue
 
                 if newmc:
                     # line with candidate state for MC sampling, e.g.:
@@ -1271,7 +1314,10 @@ class MSout_hb:
                                        self.P[p[0], p[1]].sum(axis=0)/self.n_space
                                        ])
         self.n_hb_space = max(self.hb_pairs, key=itemgetter(1))[1]
-        logging.info(f"Full msout pairs list size: {format_num(sys.getsizeof(self.hb_pairs))}")
+        if self.split_mc:
+            logging.info(f"Size of msout pairs list for MC run(s) {self.mc_range}: {format_num(sys.getsizeof(self.hb_pairs))}")
+        else:
+            logging.info(f"Size of full msout pairs list: {format_num(sys.getsizeof(self.hb_pairs))}")
 
         return
 
@@ -1351,9 +1397,18 @@ class MSout_hb:
             else:
                 # find the next MC record
                 if line.startswith("MC:"):
-                    found_mc = True
-                    newmc = True
-                    continue
+                    if not self.split_mc:
+                        found_mc = True
+                        newmc = True
+                        continue
+                    else:
+                        if self.start_mc_line <= lx < self.stop_mc_line + 1:
+                            found_mc = True
+                            newmc = True
+                        else:
+                            found_mc = False
+                            newmc = False
+                        continue
 
                 if newmc:
                     # line with candidate state for MC sampling, e.g.:
@@ -1391,11 +1446,16 @@ class MSout_hb:
 
         # accepted ms with flipped iconfs
         logging.info(f"Processed mc lines: {mc_lines:,}")
-        logging.info(f"Full msout dict size: {format_num(sys.getsizeof(hb_states))}")
+        if self.split_mc:
+            n_runs = len(self.mc_range)
+            logging.info(f"Size of msout dict for MC run(s) {self.mc_range}: {format_num(sys.getsizeof(hb_states))}")
+        else:
+            n_runs = 0
+            logging.info(f"Size of full msout dict: {format_num(sys.getsizeof(hb_states))}")
 
         self.hbms_hist_png = self.run_dir.joinpath(f"hbms_{self.pheh_str}_{self.n_space}.png")
         if not self.hbms_hist_png.exists():
-            hbms_histogram(hb_states, self.hbms_hist_png)
+            hbms_histogram(hb_states, self.hbms_hist_png, mc_runs=n_runs)
 
         rng = np.random.default_rng()
         # sample without replacement:
@@ -1417,6 +1477,8 @@ class MSout_hb:
         self.n_hb_states = len(self.hb_states)
         if not self.n_hb_states:
             logging.warning(f"No occupied hb states found.")
+        else:
+            logging.info(f"Size of output states dict: {format_num(sys.getsizeof(self.hb_states))}")
 
         return
 
@@ -1494,13 +1556,17 @@ class MSout_hb:
 
     def __str__(self):
         if self.n_space:
+            if self.split_mc:
+                space_info = f"Microstates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
+            else:
+                space_info = f"Full microstates space: {self.n_space:,}\n"
+            
             return (f"\nConformers: {self.CI.n_confs:,}\n"
                     f"Fixed residues: {self.HDR.n_fixed_ics:,}\n"
                     f"Free residues: {self.HDR.n_free_res:,}\n"
                     f"Free conformers: {self.HDR.n_free_ics:,}\n"
-                    f"Background charge: {self.CI.background_crg:.0f}\n"
-                    f"Full state space: {self.n_space:,}\n"
-                    )
+                    f"Background charge: {self.CI.background_crg:.0f}\n") + space_info
+
         return (f"\nConformers: {self.CI.n_confs:,}\n"
                 f"Fixed residues: {self.HDR.n_fixed_ics:,}\n"
                 f"Free residues: {self.HDR.n_free_res:,}\n"
@@ -1512,7 +1578,10 @@ class MSout_hb:
         """Text to output similar info for 'pairs' or 'states' processing.
         """
         if self.n_space:
-            txt = f"\nFull microstates space: {self.n_space:,}\n"
+            if self.split_mc:
+                txt = f"\nMicrostates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
+            else:            
+                txt = f"\nFull microstates space: {self.n_space:,}\n"
         else:
             txt = ""
         txt = txt + f"Occupied H-bonding space (occ > 0) {self.n_hb_space:,} "
@@ -1569,7 +1638,10 @@ class MSout_hb:
 
         start_pipeline = time()
         self.mc_lines, _, self.n_MC = get_msout_size_info(self.msout_fp)
-        self.n_skip = self.mc_lines//6  # limit the trace lines to 6
+        if not self.split_mc:
+            self.n_skip = self.mc_lines//6  # limit the trace lines to 6
+        else:
+            self.n_skip = 50_000
         logging.info(f"Approximate number of lines in msout file: {self.mc_lines:,}")
 
         if self.load_states:
