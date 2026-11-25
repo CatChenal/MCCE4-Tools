@@ -1237,6 +1237,8 @@ class MSout_hb:
         newmc = False
         mc_lines = 0
         self.n_space = 0
+        self.n_hb_space = 0
+        self.n_hb_pairs = 0
 
         msout_data = reader_gen(self.msout_fp)
         for lx, line in enumerate(msout_data, start=1):
@@ -1280,7 +1282,6 @@ class MSout_hb:
 
                     mc_lines += 1
                     count = int(fields[1])
-                    self.n_space += count
 
                     # flipped: 
                     for ic in [int(c) for c in fields[2].split()]:
@@ -1294,6 +1295,9 @@ class MSout_hb:
         # accepted ms with flipped iconfs
         logging.info(f"Processed mc lines: {mc_lines:,}")
 
+        # hb space size before filtering for occ:
+        self.n_space = self.P.sum(axis=0).max()
+
         # Save to list where each item is [(pi, pj), count, occ]
         self.hb_pairs = []
         indices = np.argwhere(self.P/self.n_space > MIN_OCC)
@@ -1301,18 +1305,12 @@ class MSout_hb:
         if not self.n_hb_pairs: 
             logging.warning("No occupied hb pairs found.")
         else:
-            if self.n_hb_pairs > 1:
-                for p in indices:
-                    self.hb_pairs.append([(int(p[0]),int(p[1])),
-                                          int(self.P[p[0], p[1]].sum(axis=0)),
-                                          self.P[p[0], p[1]].sum(axis=0)/self.n_space
-                                          ])
-            else:   # no for-loop
-                p = indices[0]
+            for p in indices:
                 self.hb_pairs.append([(int(p[0]),int(p[1])),
-                                       int(self.P[p[0], p[1]].sum(axis=0)),
-                                       self.P[p[0], p[1]].sum(axis=0)/self.n_space
-                                       ])
+                                        int(self.P[p[0], p[1]].sum()),
+                                        self.P[p[0], p[1]].sum()/self.n_space
+                                        ])
+ 
         self.n_hb_space = max(self.hb_pairs, key=itemgetter(1))[1]
         if self.split_mc:
             logging.info(f"Size of msout pairs list for MC run(s) {self.mc_range}: {format_num(sys.getsizeof(self.hb_pairs))}")
@@ -1386,6 +1384,7 @@ class MSout_hb:
         mc_lines = 0
         self.n_space = 0
         self.n_hb_space = 0
+        self.n_hb_states = 0
 
         msout_data = reader_gen(self.msout_fp)
         for lx, line in enumerate(msout_data, start=1):
@@ -1429,7 +1428,6 @@ class MSout_hb:
 
                     mc_lines += 1
                     count = int(fields[1])
-                    self.n_space += count
 
                     # flipped: 
                     for ic in [int(c) for c in fields[2].split()]:
@@ -1446,12 +1444,16 @@ class MSout_hb:
 
         # accepted ms with flipped iconfs
         logging.info(f"Processed mc lines: {mc_lines:,}")
+
         if self.split_mc:
             n_runs = len(self.mc_range)
             logging.info(f"Size of msout dict for MC run(s) {self.mc_range}: {format_num(sys.getsizeof(hb_states))}")
         else:
             n_runs = 0
             logging.info(f"Size of full msout dict: {format_num(sys.getsizeof(hb_states))}")
+
+        # hb space size before sampling & filtering for occ:
+        self.n_space = sum(values[1] for values in hb_states.values())
 
         self.hbms_hist_png = self.run_dir.joinpath(f"hbms_{self.pheh_str}_{self.n_space}.png")
         if not self.hbms_hist_png.exists():
@@ -1557,9 +1559,9 @@ class MSout_hb:
     def __str__(self):
         if self.n_space:
             if self.split_mc:
-                space_info = f"Microstates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
+                space_info = f"H-bonding microstates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
             else:
-                space_info = f"Full microstates space: {self.n_space:,}\n"
+                space_info = f"H-bonding microstates space: {self.n_space:,}\n"
             
             return (f"\nConformers: {self.CI.n_confs:,}\n"
                     f"Fixed residues: {self.HDR.n_fixed_ics:,}\n"
@@ -1579,9 +1581,9 @@ class MSout_hb:
         """
         if self.n_space:
             if self.split_mc:
-                txt = f"\nMicrostates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
+                txt = f"\nH-bonding microstates space over MC run(s) {self.mc_range}: {self.n_space:,}\n"
             else:            
-                txt = f"\nFull microstates space: {self.n_space:,}\n"
+                txt = f"\nH-bonding microstates space: {self.n_space:,}\n"
         else:
             txt = ""
         txt = txt + f"Occupied H-bonding space (occ > 0) {self.n_hb_space:,} "
