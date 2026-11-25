@@ -1090,6 +1090,9 @@ class MSout_hb:
         # value list: E, count, occ
         hb_states =  defaultdict(lambda: [0., 0, 0.])
         mc_lines = 0
+        self.n_space = 0
+        self.n_hb_space = 0
+        self.n_hb_states = 0
 
         msout_data = reader_gen(self.msout_fp)
         for lx, line in enumerate(msout_data, start=1):
@@ -1123,7 +1126,7 @@ class MSout_hb:
 
                     mc_lines += 1
                     count = int(fields[1])
-                    self.n_space += count
+
                     # flipped: 
                     for ic in [int(c) for c in fields[2].split()]:
                         xs[self.HDR.iconf2ires[ic]] = ic
@@ -1140,10 +1143,12 @@ class MSout_hb:
         # accepted ms with flipped iconfs
         logging.info(f"Processed mc lines: {mc_lines:,}")
 
+        # hb space size before filtering for occ:
+        self.n_space = sum(values[1] for values in hb_states.values())
+
         # update final states dict with aver E & occ if occ > 0.00001%:
         self.hb_states = defaultdict(lambda: [0., 0, 0.])   # [E, count, occ]
         for s in hb_states:
-            # occ = round(hb_states[s][1]/self.n_space, PREC)
             occ = hb_states[s][1]/self.n_space
             if occ > MIN_OCC:
                 # size of the returned hb states space:
@@ -1170,6 +1175,9 @@ class MSout_hb:
         found_mc = False
         newmc = False
         mc_lines = 0
+        self.n_space = 0
+        self.n_hb_space = 0
+        self.n_hb_pairs = 0
 
         msout_data = reader_gen(self.msout_fp)
         for lx, line in enumerate(msout_data, start=1):
@@ -1204,7 +1212,6 @@ class MSout_hb:
 
                     mc_lines += 1
                     count = int(fields[1])
-                    self.n_space += count
 
                     # flipped: 
                     for ic in [int(c) for c in fields[2].split()]:
@@ -1218,6 +1225,9 @@ class MSout_hb:
         # accepted ms with flipped iconfs
         logging.info(f"Processed mc lines: {mc_lines:,}")
 
+        # hb space size before filtering for occ:
+        self.n_space = self.P.sum(axis=0).max()
+
         # Save to list where each item is [(pi, pj), count, occ]
         self.hb_pairs = []
         indices = np.argwhere(self.P/self.n_space > MIN_OCC)
@@ -1226,18 +1236,11 @@ class MSout_hb:
             logging.warning("No occupied hb pairs found.")
         else:
             # removed: # round(self.P[p[0], p[1]].sum(axis=0)/self.n_space, PREC)
-            if self.n_hb_pairs > 1:
-                for p in indices:
-                    self.hb_pairs.append([(int(p[0]),int(p[1])),
-                                          int(self.P[p[0], p[1]].sum(axis=0)),
-                                          self.P[p[0], p[1]].sum(axis=0)/self.n_space
-                                          ])
-            else:   # no for-loop
-                p = indices[0]
+            for p in indices:
                 self.hb_pairs.append([(int(p[0]),int(p[1])),
-                                       int(self.P[p[0], p[1]].sum(axis=0)),
-                                       self.P[p[0], p[1]].sum(axis=0)/self.n_space
-                                       ])
+                                        int(self.P[p[0], p[1]].sum(axis=0)),
+                                        self.P[p[0], p[1]].sum(axis=0)/self.n_space
+                                        ])
         self.n_hb_space = max(self.hb_pairs, key=itemgetter(1))[1]
 
         return
@@ -1366,7 +1369,7 @@ class MSout_hb:
                     f"Free residues: {self.HDR.n_free_res:,}\n"
                     f"Free conformers: {self.HDR.n_free_ics:,}\n"
                     f"Background charge: {self.CI.background_crg:.0f}\n"
-                    f"State space: {self.n_space:,}\n"
+                    f"H-bonding microstates space: {self.n_space:,}\n"
                     )
         return (f"\nConformers: {self.CI.n_confs:,}\n"
                 f"Fixed residues: {self.HDR.n_fixed_ics:,}\n"
@@ -1378,7 +1381,10 @@ class MSout_hb:
     def get_processed_ms_info_txt(self) -> str:
         """Text to output similar info for 'pairs' or 'states' processing.
         """
-        txt = f"\nMicrostates space: {self.n_space:,}\n"
+        if self.n_space:
+            txt = f"\nH-bonding microstates space: {self.n_space:,}\n"
+        else:
+            txt = ""
         txt = txt + f"Occupied H-bonding space (occ > 0) {self.n_hb_space:,} "
         txt = txt + f"({self.n_hb_space/self.n_space:.2%} of state space)\n"
         if self.load_states:       
